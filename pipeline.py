@@ -3,12 +3,11 @@
 All entry points (daemon, on-demand CLI, maintenance CLI) import from here.
 """
 
+import json
 import os
 import re
-import time
-import json
-import glob
 import subprocess
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -17,10 +16,18 @@ from google.api_core import exceptions as api_exceptions
 from google.generativeai.types import RequestOptions
 
 from config import (
-    API_KEY, TRANSCRIPTION_MODEL, ANALYSIS_MODEL,
-    WATCH_FOLDER, FOLDERS, STATE_FILE, FAILED_ANALYSIS_LOG,
-    TRANSCRIPTION_PROMPT, ANALYSIS_PROMPT,
-    MAX_RETRIES, RETRY_BACKOFF, ANALYSIS_RETRY_BACKOFF, API_TIMEOUT,
+    ANALYSIS_MODEL,
+    ANALYSIS_PROMPT,
+    ANALYSIS_RETRY_BACKOFF,
+    API_KEY,
+    API_TIMEOUT,
+    FAILED_ANALYSIS_LOG,
+    FOLDERS,
+    MAX_RETRIES,
+    RETRY_BACKOFF,
+    STATE_FILE,
+    TRANSCRIPTION_MODEL,
+    TRANSCRIPTION_PROMPT,
 )
 
 # Shared timestamp format for filenames: "YY-MM-DD HH.MM"
@@ -41,6 +48,7 @@ def configure_gemini():
 # ERROR CLASSIFICATION
 # ============================================================================
 
+
 class FatalAPIError(Exception):
     """API error that should stop the entire service (bad key, no permissions)."""
 
@@ -55,8 +63,15 @@ def classify_api_error(error):
         return "fatal"
     if isinstance(error, (api_exceptions.InvalidArgument, api_exceptions.BadRequest)):
         return "permanent"
-    if isinstance(error, (api_exceptions.ResourceExhausted, api_exceptions.ServiceUnavailable,
-                          api_exceptions.DeadlineExceeded, api_exceptions.InternalServerError)):
+    if isinstance(
+        error,
+        (
+            api_exceptions.ResourceExhausted,
+            api_exceptions.ServiceUnavailable,
+            api_exceptions.DeadlineExceeded,
+            api_exceptions.InternalServerError,
+        ),
+    ):
         return "transient"
     if isinstance(error, api_exceptions.GoogleAPICallError):
         return "transient"
@@ -69,10 +84,10 @@ def extract_response_text(response):
         raise ValueError("Gemini returned no candidates (empty response)")
 
     candidate = response.candidates[0]
-    finish_reason = getattr(candidate, 'finish_reason', None)
+    finish_reason = getattr(candidate, "finish_reason", None)
 
     if finish_reason is not None:
-        reason_name = finish_reason.name if hasattr(finish_reason, 'name') else str(finish_reason)
+        reason_name = finish_reason.name if hasattr(finish_reason, "name") else str(finish_reason)
         if reason_name == "SAFETY":
             raise ValueError(f"Response blocked by safety filter (finish_reason={reason_name})")
         if reason_name == "OTHER":
@@ -92,6 +107,7 @@ def extract_response_text(response):
 # ============================================================================
 # STATE MANAGEMENT
 # ============================================================================
+
 
 def load_state():
     """Load processed files state from disk."""
@@ -117,6 +133,7 @@ def save_state(state):
 # HELPERS: TIMESTAMP, PARSING, FILE I/O
 # ============================================================================
 
+
 def get_audio_timestamp(audio_path):
     """Extract recording timestamp from audio file.
 
@@ -126,7 +143,9 @@ def get_audio_timestamp(audio_path):
     try:
         result = subprocess.run(
             ["mdls", "-name", "kMDItemContentCreationDate", "-raw", audio_path],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
             timestamp_str = result.stdout.strip()
@@ -143,13 +162,12 @@ def get_audio_timestamp(audio_path):
         path_parts = Path(audio_path).parts
         filename = Path(audio_path).stem
         for part in reversed(path_parts):
-            if len(part) == 10 and part[4] == '-' and part[7] == '-':
+            if len(part) == 10 and part[4] == "-" and part[7] == "-":
                 try:
-                    year, month, day = part.split('-')
-                    time_part = filename.split()[0] if ' ' in filename else filename
-                    hour, minute, second = time_part.split('-')
-                    return datetime(int(year), int(month), int(day),
-                                    int(hour), int(minute), int(second))
+                    year, month, day = part.split("-")
+                    time_part = filename.split()[0] if " " in filename else filename
+                    hour, minute, second = time_part.split("-")
+                    return datetime(int(year), int(month), int(day), int(hour), int(minute), int(second))
                 except (ValueError, IndexError):
                     continue
     except Exception:
@@ -165,7 +183,7 @@ def get_audio_timestamp(audio_path):
 
 def extract_section(content, start_marker, end_marker):
     """Extract content between start_marker and end_marker."""
-    lines = content.split('\n')
+    lines = content.split("\n")
     capturing = False
     section_lines = []
 
@@ -178,7 +196,7 @@ def extract_section(content, start_marker, end_marker):
         if capturing:
             section_lines.append(line)
 
-    return '\n'.join(section_lines).strip()
+    return "\n".join(section_lines).strip()
 
 
 def parse_transcription_response(content):
@@ -186,11 +204,11 @@ def parse_transcription_response(content):
     category = "DEFAULT"
     filename = "Unknown Meeting.md"
 
-    lines = content.strip().split('\n')
+    lines = content.strip().split("\n")
     for line in lines:
         if line.startswith("CATEGORY:"):
             extracted_cat = line.split("CATEGORY:")[1].strip().upper()
-            extracted_cat = extracted_cat.replace('"', '').replace("'", "")
+            extracted_cat = extracted_cat.replace('"', "").replace("'", "")
             if extracted_cat in FOLDERS:
                 category = extracted_cat
         elif line.startswith("FILENAME:"):
@@ -284,6 +302,7 @@ def log_failed_analysis(transcript_path, category, filename):
 # DISCOVERY & INDEXING
 # ============================================================================
 
+
 def build_transcript_index(folders):
     """Scan all category folders, build lookup dict keyed by "YY-MM-DD HH.MM"."""
     index = {}
@@ -329,7 +348,7 @@ def is_file_stable(path, wait_seconds=2):
 
 def discover_recent_folders(watch_folder, days_back=7):
     """Find date-based subfolders from the last N days, sorted oldest-first."""
-    date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+    date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
     cutoff = datetime.now() - timedelta(days=days_back)
     recent_folders = []
 
@@ -357,6 +376,7 @@ def discover_recent_folders(watch_folder, days_back=7):
 # ============================================================================
 # PROCESSING WITH RETRY
 # ============================================================================
+
 
 def upload_to_gemini(file_path):
     """Upload audio file and wait for processing. Returns Gemini file object."""
@@ -396,16 +416,16 @@ def transcribe_with_retry(audio_file):
             category, ai_filename, transcript_content = parse_transcription_response(text)
             best_result = (category, ai_filename, transcript_content)
 
-            is_default = (category == "DEFAULT")
-            is_unknown = (ai_filename == "Unknown Meeting.md")
+            is_default = category == "DEFAULT"
+            is_unknown = ai_filename == "Unknown Meeting.md"
 
             if not is_default and not is_unknown:
                 return best_result
 
             if is_default:
-                print(f"   ⚠️  Classification fell to DEFAULT", flush=True)
+                print("   ⚠️  Classification fell to DEFAULT", flush=True)
             if is_unknown:
-                print(f"   ⚠️  Filename is 'Unknown Meeting'", flush=True)
+                print("   ⚠️  Filename is 'Unknown Meeting'", flush=True)
 
         except (FatalAPIError, PermanentFileError):
             raise

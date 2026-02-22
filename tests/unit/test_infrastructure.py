@@ -21,6 +21,7 @@ def test_sample_state_fixture(sample_state):
 def test_state_file_fixture(state_file):
     """Verify the state_file fixture creates a readable JSON file."""
     import json
+
     data = json.loads(state_file.read_text())
     assert "processed" in data
 
@@ -36,11 +37,7 @@ def test_mock_gemini_response_fixture(mock_gemini_response):
 
 def test_mock_gemini_response_custom(mock_gemini_response):
     """Verify the factory accepts custom arguments."""
-    response = mock_gemini_response(
-        category="PERSONAL",
-        filename="Custom Name",
-        transcript="Custom text"
-    )
+    response = mock_gemini_response(category="PERSONAL", filename="Custom Name", transcript="Custom text")
     assert "CATEGORY: PERSONAL" in response
     assert "FILENAME: Custom Name" in response
     assert "Custom text" in response
@@ -49,4 +46,5 @@ def test_mock_gemini_response_custom(mock_gemini_response):
 def test_no_api_calls_fixture(monkeypatch):
     """Verify the autouse no_api_calls fixture sets the env var."""
     import os
+
     assert os.environ.get("GEMINI_API_KEY") == "test-key-not-real"
