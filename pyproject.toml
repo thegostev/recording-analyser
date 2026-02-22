@@ -8,6 +8,9 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[tool.setuptools]
+py-modules = ["auto_transcribe", "reclassify_and_fix", "ondemand_transcribe", "pipeline", "config"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
@@ -15,3 +18,17 @@ markers = [
     "integration: marks tests requiring external services",
 ]
 addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = ["utils/"]

@@ -10,26 +10,29 @@ Usage:
     python reclassify_and_fix.py --generate-missing-analysis --reclassify [--dry-run]
 """
 
-import os
-import sys
 import argparse
-import shutil
+import os
 import re
+import shutil
+import sys
 import time
 
-from config import FOLDERS, TRANSCRIPTION_MODEL, ANALYSIS_PROMPT, API_TIMEOUT, DELAY_BETWEEN_FILES
-from pipeline import (
-    configure_gemini, parse_transcription_response, save_analysis,
-    analyze_with_retry, extract_response_text, FatalAPIError,
-    TIMESTAMP_FORMAT,
-)
 import google.generativeai as genai
 from google.generativeai.types import RequestOptions
 
+from config import API_TIMEOUT, DELAY_BETWEEN_FILES, FOLDERS, TRANSCRIPTION_MODEL
+from pipeline import (
+    analyze_with_retry,
+    configure_gemini,
+    extract_response_text,
+    parse_transcription_response,
+    save_analysis,
+)
 
 # ============================================================================
 # MISSING ANALYSIS
 # ============================================================================
+
 
 def find_missing_analysis(folders, verbose=False):
     """Scan all category folders, return list of transcripts without analysis."""
@@ -89,9 +92,10 @@ def generate_missing_analysis(transcript_path, category, dry_run=False, verbose=
 # RECLASSIFICATION
 # ============================================================================
 
+
 def should_update_filename(filename):
     """Check if filename contains 'Unknown Meeting'."""
-    return 'Unknown Meeting' in filename
+    return "Unknown Meeting" in filename
 
 
 def reclassify_transcript(transcript_path, dry_run=False, verbose=False):
@@ -110,6 +114,7 @@ def reclassify_transcript(transcript_path, dry_run=False, verbose=False):
 
         model = genai.GenerativeModel(TRANSCRIPTION_MODEL)
         from config import TRANSCRIPTION_PROMPT
+
         classification_prompt = (
             f"{TRANSCRIPTION_PROMPT}\n\n"
             f"---TRANSCRIPT TO CLASSIFY---\n{transcript_content}\n\n"
@@ -137,12 +142,11 @@ def reclassify_transcript(transcript_path, dry_run=False, verbose=False):
 
 def extract_timestamp(filename):
     """Extract timestamp prefix from filename (YY-MM-DD HH.MM format)."""
-    match = re.match(r'^(\d{2}-\d{2}-\d{2}\s+\d{2}\.\d{2})', filename)
+    match = re.match(r"^(\d{2}-\d{2}-\d{2}\s+\d{2}\.\d{2})", filename)
     return match.group(1) if match else None
 
 
-def move_transcript_and_analysis(old_transcript_path, new_category, new_filename,
-                                  dry_run=False, verbose=False):
+def move_transcript_and_analysis(old_transcript_path, new_category, new_filename, dry_run=False, verbose=False):
     """Move both transcript and analysis files to new category folder."""
     old_filename = os.path.basename(old_transcript_path)
     timestamp = extract_timestamp(old_filename)
@@ -151,7 +155,7 @@ def move_transcript_and_analysis(old_transcript_path, new_category, new_filename
         return False
 
     # Build new filename
-    if new_filename.endswith('.md'):
+    if new_filename.endswith(".md"):
         new_full_filename = f"{timestamp} - {new_filename}"
     else:
         new_full_filename = f"{timestamp} - {new_filename}.md"
@@ -180,7 +184,7 @@ def move_transcript_and_analysis(old_transcript_path, new_category, new_filename
     has_analysis = os.path.exists(old_analysis_path)
 
     if dry_run:
-        print(f"  [DRY RUN] Would move:", flush=True)
+        print("  [DRY RUN] Would move:", flush=True)
         print(f"    FROM: {old_transcript_path}", flush=True)
         print(f"    TO:   {new_transcript_path}", flush=True)
         if has_analysis:
@@ -201,7 +205,7 @@ def move_transcript_and_analysis(old_transcript_path, new_category, new_filename
             if verbose:
                 print(f"  ✅ Moved analysis: {new_analysis_filename}", flush=True)
         elif verbose:
-            print(f"  ⚠️  No analysis file to move", flush=True)
+            print("  ⚠️  No analysis file to move", flush=True)
 
         return True
 
@@ -210,7 +214,7 @@ def move_transcript_and_analysis(old_transcript_path, new_category, new_filename
         try:
             if os.path.exists(new_transcript_path) and not os.path.exists(old_transcript_path):
                 shutil.move(new_transcript_path, old_transcript_path)
-                print(f"  🔄 Rolled back transcript move", flush=True)
+                print("  🔄 Rolled back transcript move", flush=True)
         except Exception:
             pass
         return False
@@ -218,18 +222,14 @@ def move_transcript_and_analysis(old_transcript_path, new_category, new_filename
 
 def scan_default_folder(verbose=False):
     """Scan DEFAULT folder for transcript files."""
-    default_folder = FOLDERS['DEFAULT']
+    default_folder = FOLDERS["DEFAULT"]
     transcripts_folder = os.path.join(default_folder, "transcripts")
 
     if not os.path.exists(transcripts_folder):
         print(f"⚠️  DEFAULT transcripts folder not found: {transcripts_folder}", flush=True)
         return []
 
-    transcripts = [
-        os.path.join(transcripts_folder, f)
-        for f in os.listdir(transcripts_folder)
-        if f.endswith(".md")
-    ]
+    transcripts = [os.path.join(transcripts_folder, f) for f in os.listdir(transcripts_folder) if f.endswith(".md")]
     if verbose:
         print(f"Found {len(transcripts)} transcripts in DEFAULT folder", flush=True)
     return transcripts
@@ -239,16 +239,13 @@ def scan_default_folder(verbose=False):
 # MAIN
 # ============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(description="Reclassify and fix MeetingTranscriber files")
-    parser.add_argument('--generate-missing-analysis', action='store_true',
-                       help='Generate missing analysis files')
-    parser.add_argument('--reclassify', action='store_true',
-                       help='Reclassify and move Unknown Meeting files')
-    parser.add_argument('--dry-run', action='store_true',
-                       help='Preview changes without executing')
-    parser.add_argument('--verbose', action='store_true',
-                       help='Show detailed progress')
+    parser.add_argument("--generate-missing-analysis", action="store_true", help="Generate missing analysis files")
+    parser.add_argument("--reclassify", action="store_true", help="Reclassify and move Unknown Meeting files")
+    parser.add_argument("--dry-run", action="store_true", help="Preview changes without executing")
+    parser.add_argument("--verbose", action="store_true", help="Show detailed progress")
 
     args = parser.parse_args()
 
@@ -317,18 +314,19 @@ def main():
 
                 result = reclassify_transcript(transcript_path, args.dry_run, args.verbose)
                 if result is None:
-                    print(f"  ❌ Classification failed")
+                    print("  ❌ Classification failed")
                     failed_count += 1
                     continue
 
                 new_category, new_filename = result
-                if new_category == 'DEFAULT':
-                    print(f"  ⚠️  Still classified as DEFAULT, skipping move")
+                if new_category == "DEFAULT":
+                    print("  ⚠️  Still classified as DEFAULT, skipping move")
                     skipped_count += 1
                     continue
 
-                if move_transcript_and_analysis(transcript_path, new_category, new_filename,
-                                                 args.dry_run, args.verbose):
+                if move_transcript_and_analysis(
+                    transcript_path, new_category, new_filename, args.dry_run, args.verbose
+                ):
                     moved_count += 1
                 else:
                     failed_count += 1

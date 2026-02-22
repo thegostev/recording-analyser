@@ -1,9 +1,6 @@
 """Shared test fixtures for MeetingTranscriber."""
 
 import json
-import os
-import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -74,14 +71,8 @@ def state_file(tmp_path, sample_state):
 def mock_gemini_response():
     """Factory fixture for mock Gemini API responses."""
 
-    def _make_response(category="WORK", filename="Test Meeting - Topics",
-                       transcript="This is a test transcript."):
-        text = (
-            f"CATEGORY: {category}\n"
-            f"FILENAME: {filename}\n"
-            f"---TRANSCRIPT---\n"
-            f"{transcript}"
-        )
+    def _make_response(category="WORK", filename="Test Meeting - Topics", transcript="This is a test transcript."):
+        text = f"CATEGORY: {category}\nFILENAME: {filename}\n---TRANSCRIPT---\n{transcript}"
         return text
 
     return _make_response
