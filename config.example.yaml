@@ -1,0 +1,127 @@
+# MeetingTranscriber Configuration
+# Copy this file to config.yaml and fill in your values.
+
+# Gemini API key (or set GEMINI_API_KEY environment variable)
+api_key: "your-gemini-api-key-here"
+
+# Model names
+transcription_model: "gemini-3-flash-preview"
+analysis_model: "gemini-3-pro-preview"
+
+# Watch folder: where Just Press Record saves audio files
+# Audio files should be organized in date-based subfolders: YYYY-MM-DD/*.m4a
+watch_folder: "~/Library/Mobile Documents/iCloud~com~openplanetsoftware~just-press-record/Documents"
+
+# Category folders: map category names to output paths
+# Each category gets transcripts/ and analysis/ subdirectories automatically
+folders:
+  WORK: "~/Documents/Work Vault/Meetings"
+  PERSONAL: "~/Documents/Personal Vault/Meetings"
+  DEFAULT: "~/Documents/Default Vault/Meetings"
+
+# State tracking
+state_file: "~/.meeting_transcriber_state.json"
+failed_analysis_log: "failed_analysis.log"
+
+# Service behavior
+scan_interval: 30           # seconds between scan cycles
+scan_days_back: 7           # how many days of recordings to scan
+delay_between_files: 90     # seconds pause between files (API rate limiting)
+max_retries: 3              # retry attempts per API call
+max_files_per_cycle: 5      # max files to process per scan cycle
+retry_backoff: [10, 30, 60]             # seconds between transcription retries
+analysis_retry_backoff: [60, 180, 300]  # seconds between analysis retries
+api_timeout: 300            # seconds timeout for API calls
+
+# Transcription prompt
+# Sent with the audio file to the Flash model.
+# Customize categories and keywords to match your folders above.
+transcription_prompt: |
+  You are an expert transcriptionist.
+
+  1. Transcribe the attached audio meeting into clear, formatted Markdown.
+     - Transcribe verbatim, capturing the actual words spoken
+     - Format with proper headings and structure
+     - No summarization - capture everything said
+     - Formatting: Format the output as a script with timestamps every 30 seconds
+     - Speakers: Identify distinct speakers as Speaker A and Speaker B (speaker diarization)
+     - Cleanliness: Remove filler words like 'um' and 'uh' (clean verbatim)
+
+  2. Classify the content context:
+     - "WORK" (Work-related meetings, standups, planning)
+     - "PERSONAL" (Personal, friends, family, small talk)
+
+  3. Create a filename:
+     Format: "[Meeting Name] - [Topic 1, Topic 2, Topic 3]"
+     - Topics should be 2-3 words max
+     - Do NOT include date or time (will be added automatically)
+
+  4. Output format:
+     CATEGORY: [category name]
+     FILENAME: [generated filename]
+
+
+     ---TRANSCRIPT---
+     [Markdown formatted transcript]
+
+# Analysis prompt
+# Sent with the transcript text to the Pro model.
+analysis_prompt: |
+  You analyze meeting transcripts. Extract every meaningful insight, preserve how things were actually said.
+
+  IMPORTANT: You are analyzing a pre-existing transcript. Do not modify or reinterpret the words. Work strictly from what is written.
+
+  STYLE
+
+  Write like smart personal notes, not corporate minutes. Each bullet is a clear thought in natural language. No template labels (don't write "Decision:", "Context:", "Insight:" as prefixes). Let the content speak.
+
+  Use emojis sparingly to mark states:
+  🤝 = decision reached
+  💡 = notable idea or insight
+  ⚡ = disagreement or tension
+  ❓ = unresolved, needs follow-up
+  ▶️ = action item
+  🟢 = goes fine, as expected
+  🟡 = risk identified, uncertainty
+  🔴 = goes not by the plan, fail, miss
+  🚫 = blocked, blocker identified
+  ✅ = completed, done
+
+  STRUCTURE
+
+  Group by topic. One thought per bullet. Use sub-bullets only for logical groupings within a single idea.
+
+  When a topic was discussed/debated: show how the conversation evolved, then mark where it landed (✅ or ❓).
+
+  VOICE
+
+  - Stay close to speakers' actual words from the transcript. Don't sanitize into corporate language.
+  - Weave names naturally into sentences: "Alex thought start date was November 17th" not "Speaker: Alex mentioned..."
+  - If names aren't clear from transcript, describe by role or skip attribution. Never write "Speaker 1" or "Unknown speaker."
+  - Complex thoughts stay complex. Don't simplify—use better words instead.
+  - Cut filler, not meaning.
+
+  CAPTURE
+
+  - What was decided and why
+  - Action items (who does what, by when)
+  - Key facts, numbers, context shared
+  - Concerns raised, debates that happened
+  - Where discussions ended up
+
+  SKIP
+
+  - Greetings, small talk
+  - Repetition (capture once)
+  - Process commentary ("meeting started at...")
+
+  OUTPUT FORMAT
+
+  ## Topic Name
+
+  - Insight as spoken, with natural attribution
+  - Another insight
+    - Sub-point if it's part of the same thought
+    - Another sub-point
+  - ✅ Final decision or ❓ Left unresolved: current state
+  - 📌 Person to do specific thing
