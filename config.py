@@ -6,6 +6,7 @@ Loads settings from config.yaml. API key comes from GEMINI_API_KEY env var only.
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -14,7 +15,7 @@ _CONFIG_DIR = Path(__file__).parent
 _CONFIG_FILE = _CONFIG_DIR / "config.yaml"
 
 
-def load_config(config_path: Path = _CONFIG_FILE) -> dict:
+def load_config(config_path: Path = _CONFIG_FILE) -> dict[str, Any]:
     """Load configuration from YAML file.
 
     Args:
@@ -32,7 +33,7 @@ def load_config(config_path: Path = _CONFIG_FILE) -> dict:
         sys.exit(1)
 
     with open(config_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+        cfg: dict[str, Any] = yaml.safe_load(f)
 
     # API key: environment variable only (constitution §IV)
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -47,12 +48,8 @@ def load_config(config_path: Path = _CONFIG_FILE) -> dict:
 
     # Expand ~ in path values
     cfg["watch_folder"] = os.path.expanduser(cfg["watch_folder"])
-    cfg["state_file"] = os.path.expanduser(
-        cfg.get("state_file", "~/.meeting_transcriber_state.json")
-    )
-    cfg["failed_analysis_log"] = os.path.expanduser(
-        cfg.get("failed_analysis_log", "failed_analysis.log")
-    )
+    cfg["state_file"] = os.path.expanduser(cfg.get("state_file", "~/.meeting_transcriber_state.json"))
+    cfg["failed_analysis_log"] = os.path.expanduser(cfg.get("failed_analysis_log", "failed_analysis.log"))
 
     for cat in cfg.get("folders", {}):
         cfg["folders"][cat] = os.path.expanduser(cfg["folders"][cat])

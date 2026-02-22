@@ -3,29 +3,40 @@
 Runs as a launchd service. See README.md for setup instructions.
 """
 
+import glob
 import os
 import sys
-import glob
+import time
 from datetime import datetime
 
 from config import (
-    WATCH_FOLDER, FOLDERS, SCAN_INTERVAL, SCAN_DAYS_BACK,
-    DELAY_BETWEEN_FILES, MAX_FILES_PER_CYCLE, API_TIMEOUT, STATE_FILE,
+    API_TIMEOUT,
+    DELAY_BETWEEN_FILES,
+    FOLDERS,
+    MAX_FILES_PER_CYCLE,
     MAX_RETRIES,
+    SCAN_DAYS_BACK,
+    SCAN_INTERVAL,
+    STATE_FILE,
+    WATCH_FOLDER,
 )
 from pipeline import (
-    configure_gemini, get_audio_timestamp, is_file_stable,
-    build_transcript_index, discover_recent_folders,
-    load_state, save_state, process_audio,
-    FatalAPIError, TIMESTAMP_FORMAT,
+    TIMESTAMP_FORMAT,
+    FatalAPIError,
+    build_transcript_index,
+    configure_gemini,
+    discover_recent_folders,
+    get_audio_timestamp,
+    is_file_stable,
+    load_state,
+    process_audio,
+    save_state,
 )
-
-import time
-
 
 # ============================================================================
 # AUDIO DISCOVERY (daemon-specific: state filtering, index dedup, per-cycle cap)
 # ============================================================================
+
 
 def discover_audio_files(watch_folder, state, transcript_index):
     """Find unprocessed .m4a files in recent date folders.
@@ -82,8 +93,11 @@ def discover_audio_files(watch_folder, state, transcript_index):
 
     if len(audio_files) > MAX_FILES_PER_CYCLE:
         deferred = len(audio_files) - MAX_FILES_PER_CYCLE
-        print(f"   📋 {len(audio_files)} files found, processing {MAX_FILES_PER_CYCLE} "
-              f"this cycle ({deferred} deferred to next cycle)", flush=True)
+        print(
+            f"   📋 {len(audio_files)} files found, processing {MAX_FILES_PER_CYCLE} "
+            f"this cycle ({deferred} deferred to next cycle)",
+            flush=True,
+        )
         audio_files = audio_files[:MAX_FILES_PER_CYCLE]
 
     return audio_files
@@ -92,6 +106,7 @@ def discover_audio_files(watch_folder, state, transcript_index):
 # ============================================================================
 # SCAN CYCLE & MAIN LOOP
 # ============================================================================
+
 
 def run_scan_cycle(state, transcript_index, cycle_number):
     """Run one scan-and-process cycle. Returns count of files processed."""
@@ -102,8 +117,10 @@ def run_scan_cycle(state, transcript_index, cycle_number):
             print(f"[Cycle {cycle_number}] {datetime.now().strftime('%H:%M:%S')} - No new files", flush=True)
         return 0
 
-    print(f"\n[Cycle {cycle_number}] {datetime.now().strftime('%H:%M:%S')} - "
-          f"Found {len(new_files)} file(s) to process", flush=True)
+    print(
+        f"\n[Cycle {cycle_number}] {datetime.now().strftime('%H:%M:%S')} - Found {len(new_files)} file(s) to process",
+        flush=True,
+    )
 
     success_count = 0
     fail_count = 0
@@ -147,10 +164,8 @@ def main():
     print("=" * 60, flush=True)
 
     state = load_state()
-    processed_count = len([v for v in state.get("processed", {}).values()
-                           if v.get("status") == "complete"])
-    failed_count = len([v for v in state.get("processed", {}).values()
-                        if v.get("status") == "failed_permanent"])
+    processed_count = len([v for v in state.get("processed", {}).values() if v.get("status") == "complete"])
+    failed_count = len([v for v in state.get("processed", {}).values() if v.get("status") == "failed_permanent"])
     print(f"\n📚 Loaded state: {processed_count} completed, {failed_count} permanently failed", flush=True)
 
     print("📚 Building transcript index...", flush=True)

@@ -6,31 +6,36 @@ Usage:
     python ondemand_transcribe.py --catchup --reprocess-partial  # Fix missing analysis
 """
 
+import argparse
+import glob
 import os
 import sys
-import glob
-import argparse
-from datetime import datetime
 
-from config import WATCH_FOLDER, FOLDERS, DELAY_BETWEEN_FILES
+from config import DELAY_BETWEEN_FILES, FOLDERS, WATCH_FOLDER
 from pipeline import (
-    configure_gemini, get_audio_timestamp, is_file_stable,
-    build_transcript_index, discover_recent_folders,
-    process_audio, analyze_with_retry, save_analysis,
-    load_state, save_state, TIMESTAMP_FORMAT, FatalAPIError,
+    TIMESTAMP_FORMAT,
+    FatalAPIError,
+    analyze_with_retry,
+    build_transcript_index,
+    configure_gemini,
+    discover_recent_folders,
+    get_audio_timestamp,
+    is_file_stable,
+    load_state,
+    process_audio,
+    save_analysis,
 )
-
 
 # ============================================================================
 # DISCOVERY (on-demand specific: explicit subfolder list, no state filtering)
 # ============================================================================
 
+
 def discover_audio_files(watch_folder, scan_subfolders, verbose=False):
     """Scan specific subfolders for .m4a files. Returns list of (path, timestamp) tuples."""
     if not scan_subfolders:
         raise ValueError(
-            "scan_subfolders must contain at least one subfolder. "
-            "Use --catchup to auto-discover date folders."
+            "scan_subfolders must contain at least one subfolder. Use --catchup to auto-discover date folders."
         )
 
     audio_files = []
@@ -82,6 +87,7 @@ def check_processing_status(audio_file, timestamp, transcript_index):
 # BATCH PROCESSING
 # ============================================================================
 
+
 def process_batch(unprocessed_files, state, dry_run=False):
     """Process list of audio files. Returns {"success": int, "failed": list}."""
     success_count = 0
@@ -95,7 +101,7 @@ def process_batch(unprocessed_files, state, dry_run=False):
         if dry_run:
             print(f"  📁 Path: {audio_path}", flush=True)
             print(f"  🕐 Timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
-            print(f"  ⚠️  DRY RUN - Would process this file", flush=True)
+            print("  ⚠️  DRY RUN - Would process this file", flush=True)
             success_count += 1
             continue
 
@@ -116,6 +122,7 @@ def process_batch(unprocessed_files, state, dry_run=False):
         # Rate limiting between files
         if i < total and not dry_run:
             import time
+
             print(f"   ⏸️  Pausing {DELAY_BETWEEN_FILES}s before next file...", flush=True)
             time.sleep(DELAY_BETWEEN_FILES)
 
@@ -134,7 +141,7 @@ def reprocess_analysis_only(transcript_only_files, dry_run=False):
 
         if dry_run:
             print(f"  📝 Transcript: {transcript_path}", flush=True)
-            print(f"  ⚠️  DRY RUN - Would generate analysis", flush=True)
+            print("  ⚠️  DRY RUN - Would generate analysis", flush=True)
             success_count += 1
             continue
 
@@ -166,6 +173,7 @@ def reprocess_analysis_only(transcript_only_files, dry_run=False):
         # Rate limiting
         if i < total and not dry_run:
             import time
+
             print(f"   ⏸️  Pausing {DELAY_BETWEEN_FILES}s before next analysis...", flush=True)
             time.sleep(DELAY_BETWEEN_FILES)
 
@@ -176,6 +184,7 @@ def reprocess_analysis_only(transcript_only_files, dry_run=False):
 # MAIN
 # ============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Process unprocessed audio recordings on-demand",
@@ -185,16 +194,23 @@ Examples:
   python ondemand_transcribe.py --catchup --dry-run          # Preview last 7 days
   python ondemand_transcribe.py --catchup 14                 # Process last 14 days
   python ondemand_transcribe.py --catchup --reprocess-partial  # Fix missing analysis
-        """
+        """,
     )
-    parser.add_argument("--dry-run", action="store_true",
-                       help="Show what would be processed without actually processing")
-    parser.add_argument("--reprocess-partial", action="store_true",
-                       help="Generate missing analysis for existing transcripts")
-    parser.add_argument("--verbose", action="store_true",
-                       help="Show detailed progress")
-    parser.add_argument("--catchup", type=int, metavar="DAYS", nargs="?", const=7,
-                       help="Auto-discover date folders from last N days (default: 7)")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be processed without actually processing"
+    )
+    parser.add_argument(
+        "--reprocess-partial", action="store_true", help="Generate missing analysis for existing transcripts"
+    )
+    parser.add_argument("--verbose", action="store_true", help="Show detailed progress")
+    parser.add_argument(
+        "--catchup",
+        type=int,
+        metavar="DAYS",
+        nargs="?",
+        const=7,
+        help="Auto-discover date folders from last N days (default: 7)",
+    )
 
     args = parser.parse_args()
 
@@ -282,7 +298,7 @@ Examples:
         print(f"  ❌ Failed:  {len(results['failed'])}")
     elif transcript_only:
         print(f"\n💡 Tip: {len(transcript_only)} file(s) have transcripts but no analysis.")
-        print(f"   Run with --reprocess-partial to generate missing analysis.")
+        print("   Run with --reprocess-partial to generate missing analysis.")
 
     print(f"\n{'=' * 60}")
     print("✅ Done!")
