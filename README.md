@@ -1,7 +1,6 @@
 # RecordingAnalyser
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/thegostev/recording-analyser/tests.yml?logo=github&label=build)](https://github.com/thegostev/recording-analyser/actions)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/thegostev/recording-analyser)
 [![License: MIT](https://img.shields.io/github/license/thegostev/recording-analyser?color=green)](https://github.com/thegostev/recording-analyser/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)](https://www.python.org)
 [![Google Gemini](https://img.shields.io/badge/API-Google%20Gemini-8E75B2?logo=googlegemini&logoColor=white)](https://ai.google.dev)
