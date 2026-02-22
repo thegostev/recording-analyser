@@ -1,0 +1,45 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Secrets and config
+.env
+.env.*
+config.yaml
+
+# Utility scripts (personal one-off tools)
+utils/
+
+# Embedded repo clone (original GitHub clone, not part of this repo)
+recording-analyser/
+
+# Backup files
+*.backup
+*.py.backup
+
+# Logs
+*.log
+
+# State files
+.transcriber.pid
+
+# Legacy docs
+run_auto_transkriber.md
+Transcribing meetings and placing them into the right folder on Mac..md
+
+# IDE
+.vscode/
+.idea/
+
+# pytest
+.pytest_cache/
