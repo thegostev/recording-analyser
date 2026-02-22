@@ -8,6 +8,9 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[tool.setuptools]
+py-modules = ["auto_transcribe", "reclassify_and_fix", "ondemand_transcribe", "pipeline", "config"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
