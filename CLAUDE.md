@@ -1,4 +1,4 @@
-# MeetingTranscriber
+# RecordingAnalyser
 
 Automated audio transcription and analysis service using Gemini API, running as a macOS launchd daemon with output to Obsidian vaults.
 
@@ -10,7 +10,7 @@ The constitution contains immutable project principles that no atomic task can v
 
 ## Architecture
 
-Long-running daemon (`auto_transcribe.py`) plus CLI tools for catchup and maintenance, sharing a common processing pipeline. Audio files are discovered from iCloud-synced Just Press Record folders, processed through Gemini Flash (transcription + classification) and Gemini Pro (analysis), then output as Markdown to categorized Obsidian vault folders.
+Shared pipeline module (`pipeline.py`) plus thin entry points: daemon (`auto_transcribe.py`), CLI catchup (`ondemand_transcribe.py`), and maintenance (`reclassify_and_fix.py`). Audio files are discovered from iCloud-synced Just Press Record folders, processed through Gemini Flash (transcription + classification) and Gemini Pro (analysis), then output as Markdown to categorized Obsidian vault folders.
 
 - See `ARCHITECTURE.md` for WBS decomposition (S1-S3, modules, components)
 - See `docs/adr/` for architectural decisions affecting this project
@@ -50,9 +50,7 @@ python -m pytest tests/ -v
 
 ## Known technical debt
 
-- **Timestamp extraction duplicated** across `ondemand_transcribe.py` and utility scripts — should be extracted into shared module
-- **Code duplication** between `auto_transcribe.py` and `ondemand_transcribe.py` — shared functions are copy-pasted rather than imported from a common module
-- **Minimal test suite** — infrastructure smoke tests exist but no tests for core pipeline functions
+- **Minimal test suite** — infrastructure smoke tests exist but no tests for core pipeline functions (see RA-003, RA-004, RA-005)
 
 ## Constraints and gotchas
 
@@ -77,11 +75,14 @@ python -m pytest tests/ -v
 
 ## File reference when stuck
 
-- **Processing pipeline**: `auto_transcribe.py` — `process_audio()` orchestrates the full flow
+- **Processing pipeline**: `pipeline.py` — `process_audio()` orchestrates the full flow, all shared functions live here
+- **Error classification**: `pipeline.py` — `classify_api_error()`, `FatalAPIError`, `PermanentFileError`
+- **State management**: `pipeline.py` — `load_state()`, `save_state()`, `build_transcript_index()`
+- **Gemini API**: `pipeline.py` — `configure_gemini()`, `upload_to_gemini()`, `transcribe_with_retry()`, `analyze_with_retry()`
 - **Category definitions**: `config.yaml` — `folders` mapping; loaded via `config.py`
 - **Prompt engineering**: `config.yaml` — `transcription_prompt` and `analysis_prompt`; loaded via `config.py`
-- **Error classification**: `auto_transcribe.py` — `classify_api_error()` for the 3-tier system
 - **State format**: `~/.meeting_transcriber_state.json` — JSON dict keyed by file path
+- **Daemon loop**: `auto_transcribe.py` — `discover_audio_files()`, `run_scan_cycle()`, `main()`
 - **CLI options**: `ondemand_transcribe.py` — argparse at bottom of file
 - **Maintenance ops**: `reclassify_and_fix.py` — `--generate-missing-analysis` and `--reclassify`
 - **WBS decomposition**: `ARCHITECTURE.md` — L0-L3 module/component mapping

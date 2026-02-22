@@ -1,4 +1,4 @@
-# MeetingTranscriber — Architecture & WBS Decomposition
+# RecordingAnalyser — Architecture & WBS Decomposition
 
 Adapted from NASA/SP-20210023927 Work Breakdown Structure standard.
 
@@ -11,7 +11,7 @@ Three rules at every level:
 
 ## Level 0 — System
 
-**MeetingTranscriber**: Automated audio transcription and analysis service
+**RecordingAnalyser**: Automated audio transcription and analysis service
 that ingests recordings from Just Press Record, transcribes and classifies
 them via Gemini API, and outputs structured Markdown notes to categorized
 Obsidian vaults.
