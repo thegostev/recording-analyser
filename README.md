@@ -1,6 +1,9 @@
-# MeetingTranscriber
+# RecordingAnalyser
 
 Automated transcription and analysis of audio recordings using Google's Gemini API. Runs as a macOS background service, processes audio from [Just Press Record](https://www.openplanetsoftware.com/just-press-record/), classifies content into categories, and outputs structured Markdown notes to Obsidian vaults.
+
+> [!NOTE]
+> RecordingAnalyser is a 24/7 launchd daemon.
 
 ## What it does
 
@@ -20,8 +23,8 @@ Automated transcription and analysis of audio recordings using Google's Gemini A
 ## Setup
 
 ```bash
-git clone <repo-url> MeetingTranscriber
-cd MeetingTranscriber
+git clone <repo-url> RecordingAnalyser
+cd RecordingAnalyser
 
 python3 -m venv venv
 source venv/bin/activate
@@ -30,8 +33,14 @@ pip install -e .
 cp config.example.yaml config.yaml
 ```
 
+Set your API key:
+
+```bash
+# Add to ~/.zshrc (or your shell profile)
+export GEMINI_API_KEY="your-gemini-api-key-here"
+```
+
 Edit `config.yaml`:
-- Add your Gemini API key (or set `GEMINI_API_KEY` environment variable)
 - Set `watch_folder` to where your audio files are saved
 - Define your categories and output folder paths
 - Customize the transcription and analysis prompts
@@ -51,9 +60,14 @@ Create a launchd plist at `~/Library/LaunchAgents/com.meetingtranscriber.plist`:
     <string>com.meetingtranscriber</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/path/to/MeetingTranscriber/venv/bin/python</string>
-        <string>/path/to/MeetingTranscriber/auto_transcribe.py</string>
+        <string>/path/to/RecordingAnalyser/venv/bin/python</string>
+        <string>/path/to/RecordingAnalyser/auto_transcribe.py</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GEMINI_API_KEY</key>
+        <string>your-gemini-api-key-here</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -99,25 +113,13 @@ python ondemand_transcribe.py --catchup --reprocess-partial # regenerate missing
 ./run_transcriber.sh catchup-preview # dry run
 ```
 
-## Maintenance
-
-Fix misclassified or incomplete files:
-
-```bash
-./run_transcriber.sh fix-analysis --dry-run     # preview missing analysis generation
-./run_transcriber.sh fix-analysis               # generate missing analysis files
-./run_transcriber.sh fix-categories --dry-run   # preview reclassification
-./run_transcriber.sh fix-categories             # reclassify and move to correct folders
-./run_transcriber.sh fix-all --dry-run          # preview all fixes
-```
-
 ## Configuration
 
 All settings live in `config.yaml`. See `config.example.yaml` for the full structure.
 
 | Setting | Description |
 |---|---|
-| `api_key` | Gemini API key (or use `GEMINI_API_KEY` env var) |
+| `GEMINI_API_KEY` | Environment variable (required). Set in shell profile or launchd plist |
 | `watch_folder` | Where audio files are saved (date-based subfolders: `YYYY-MM-DD/*.m4a`) |
 | `folders` | Map of category names to output paths. Each gets `transcripts/` and `analysis/` subdirectories |
 | `transcription_prompt` | Prompt sent with audio to Flash model. Define your categories and keywords here |
@@ -158,6 +160,7 @@ Key design choices:
 ## Project structure
 
 ```
+pipeline.py            Shared transcription pipeline (API, parsing, file I/O, state)
 auto_transcribe.py     Long-running daemon service
 ondemand_transcribe.py Manual/batch processing CLI
 reclassify_and_fix.py  Maintenance: fix missing analysis, reclassify files

@@ -1,8 +1,8 @@
 # MeetingTranscriber Configuration
 # Copy this file to config.yaml and fill in your values.
 
-# Gemini API key (or set GEMINI_API_KEY environment variable)
-api_key: "your-gemini-api-key-here"
+# API key: set GEMINI_API_KEY environment variable (required)
+# export GEMINI_API_KEY="your-key"  # in ~/.zshrc or launchd plist
 
 # Model names
 transcription_model: "gemini-3-flash-preview"

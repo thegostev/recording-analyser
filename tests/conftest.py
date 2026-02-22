@@ -17,7 +17,6 @@ if not _TEST_CONFIG.exists():
     import yaml
 
     _test_cfg = {
-        "api_key": "test-key-not-real",
         "transcription_model": "gemini-3-flash-preview",
         "analysis_model": "gemini-3-pro-preview",
         "watch_folder": "/tmp/test-watch-folder",

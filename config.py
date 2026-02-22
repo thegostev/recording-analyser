@@ -1,7 +1,6 @@
 """Configuration loader for MeetingTranscriber.
 
-Loads settings from config.yaml in the project directory.
-Falls back to GEMINI_API_KEY environment variable for the API key.
+Loads settings from config.yaml. API key comes from GEMINI_API_KEY env var only.
 """
 
 import os
@@ -35,12 +34,12 @@ def load_config(config_path: Path = _CONFIG_FILE) -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    # API key: config file first, then env var
-    api_key = cfg.get("api_key") or os.environ.get("GEMINI_API_KEY")
+    # API key: environment variable only (constitution §IV)
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print(
-            "ERROR: No API key found. "
-            "Set 'api_key' in config.yaml or GEMINI_API_KEY environment variable.",
+            "ERROR: GEMINI_API_KEY environment variable is required.\n"
+            "Set it in your shell profile or launchd plist EnvironmentVariables.",
             flush=True,
         )
         sys.exit(1)

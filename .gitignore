@@ -20,9 +20,6 @@ config.yaml
 # Utility scripts (personal one-off tools)
 utils/
 
-# Embedded repo clone (original GitHub clone, not part of this repo)
-recording-analyser/
-
 # Backup files
 *.backup
 *.py.backup
