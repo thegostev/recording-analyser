@@ -1,3 +1,5 @@
+<img width="2816" height="1536" alt="Gemini_Generated_Image_dlm2otdlm2otdlm2" src="https://github.com/user-attachments/assets/a41ea4c2-a7a0-4944-8df5-cd98a9d35e61" />
+
 # RecordingAnalyser
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/thegostev/recording-analyser/tests.yml?logo=github&label=build)](https://github.com/thegostev/recording-analyser/actions)
