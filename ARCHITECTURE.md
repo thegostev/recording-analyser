@@ -105,17 +105,24 @@ folder to find unprocessed `.m4a` files.
 - **Internal data model**: list of `(file_path, timestamp)` tuples
 - **Dependencies**: S3 (state + transcript index for filtering)
 
-### S1.M2: Gemini API Integration
+### S1.M2: AI API Integration
 
-Manages all communication with the Gemini API: file upload, model
-invocation, response parsing, and retry logic.
+Manages all communication with AI providers: Gemini API for transcription
+and primary analysis; Claude API as a fallback when Gemini analysis fails.
 
 - **Public interface**: `upload_to_gemini(file_path)`,
   `transcribe_with_retry(audio_file)`,
   `analyze_with_retry(transcript_content)`,
-  `extract_response_text(response)`
-- **Internal data model**: Gemini `File` objects, `GenerateContentResponse`
-- **Dependencies**: `google.generativeai` SDK, API key configuration
+  `analyze_with_claude(transcript_content)`,
+  `extract_response_text(response)`,
+  `configure_gemini()`, `configure_claude()`
+- **Internal data model**: Gemini `File` objects, `GenerateContentResponse`,
+  Anthropic `Message` objects; `_claude_client` module singleton
+- **Dependencies**: `google.generativeai` SDK, `anthropic` SDK,
+  `GEMINI_API_KEY` (required), `ANTHROPIC_API_KEY` (optional)
+- **Fallback behaviour**: `analyze_with_retry()` tries Gemini first; on
+  failure immediately switches to Claude (×2), then returns to Gemini (×2).
+  If `ANTHROPIC_API_KEY` is absent, original Gemini-only chain is used.
 
 ### S1.M3: Classification & Parsing
 
@@ -193,7 +200,8 @@ prevent re-processing.
 > **Quality coverage checkpoint (L2)**:
 > S1.M1: Filters `.icloud`, `.tmp`, hidden files; stability check (2s).
 > S1.M2: 3-tier error classification; retry with backoff [10,30,60]s
-> transcription, [60,180,300]s analysis.
+> transcription; analysis uses G→C→C→G→G sequence when Claude key is set,
+> or Gemini-only [60,180,300]s chain otherwise.
 > S1.M3: Falls back to DEFAULT on parse failure.
 > S1.M4: Creates directories on demand; handles filename collisions
 > with `(2)`, `(3)` suffix.
@@ -242,11 +250,21 @@ prevent re-processing.
   `PermanentFileError` (skip file), transient (retry then raise)
 
 ### S1.M2.C3: Analysis Caller
-- **File(s)**: `auto_transcribe.py` — `analyze_with_retry()`
+- **File(s)**: `pipeline.py` — `analyze_with_retry()`
 - **Interface contract**: `(transcript_content)` → analysis text from
-  Pro model; retries 3× with [60,180,300]s backoff
-- **Error taxonomy**: same as C2 but with pro-tier quota recovery
-  timing; on exhaustion returns best partial result or raises
+  Pro model with Claude fallback; attempt sequence (Claude configured):
+  Gemini → Claude → Claude → Gemini → Gemini
+- **Error taxonomy**: Gemini fatal errors stop service; Claude errors are
+  non-fatal (return None); on full exhaustion returns None gracefully
+
+### S1.M2.C4: Claude Analysis Fallback
+- **File(s)**: `pipeline.py` — `configure_claude()`, `analyze_with_claude()`
+- **Interface contract**: `configure_claude()` initialises Anthropic client
+  from `ANTHROPIC_API_KEY` at startup (no-op if key absent or package
+  missing); `analyze_with_claude(transcript_content)` → text or None,
+  never raises
+- **Error taxonomy**: all Anthropic SDK errors caught and logged; returns
+  None (non-fatal); ImportError on missing package also caught gracefully
 
 ### S1.M3.C1: Response Parser
 - **File(s)**: `auto_transcribe.py` — `parse_transcription_response()`

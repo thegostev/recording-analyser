@@ -102,36 +102,13 @@ python auto_transcribe.py
 
 ### On-demand / catchup
 
+Run it in case the daemon is failed for some reason. Though daemon is stable and this catchup is not required.
+
 ```bash
 python ondemand_transcribe.py --catchup --dry-run      # preview what would run
 python ondemand_transcribe.py --catchup                # process last 7 days
 python ondemand_transcribe.py --catchup 14             # process last 14 days
 python ondemand_transcribe.py --catchup --reprocess-partial  # regenerate missing analysis only
-```
-
-### Shell wrapper
-
-```bash
-./run_transcriber.sh start           # launch in background
-./run_transcriber.sh stop            # stop
-./run_transcriber.sh status          # check status
-./run_transcriber.sh catchup         # process last 7 days
-./run_transcriber.sh catchup-preview # dry run
-```
-
-### Maintenance
-
-```bash
-# Generate analysis for transcripts that don't have one
-python reclassify_and_fix.py --generate-missing-analysis --dry-run
-python reclassify_and_fix.py --generate-missing-analysis
-
-# Re-classify "Unknown Meeting" files and move them to the correct folder
-python reclassify_and_fix.py --reclassify --dry-run
-python reclassify_and_fix.py --reclassify
-
-# Both at once
-python reclassify_and_fix.py --generate-missing-analysis --reclassify --dry-run
 ```
 
 ## Configuration

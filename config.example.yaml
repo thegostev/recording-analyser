@@ -4,9 +4,14 @@
 # API key: set GEMINI_API_KEY environment variable (required)
 # export GEMINI_API_KEY="your-key"  # in ~/.zshrc or launchd plist
 
+# Claude fallback: set ANTHROPIC_API_KEY environment variable (optional)
+# If set, Claude Sonnet is used as fallback when Gemini Pro analysis fails.
+# export ANTHROPIC_API_KEY="your-key"  # in ~/.zshrc or launchd plist
+
 # Model names
 transcription_model: "gemini-3-flash-preview"
 analysis_model: "gemini-3-pro-preview"
+# claude_fallback_model: "claude-sonnet-4-6"   # default; override if needed
 
 # Watch folder: where Just Press Record saves audio files
 # Audio files should be organized in date-based subfolders: YYYY-MM-DD/*.m4a

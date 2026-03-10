@@ -24,6 +24,7 @@ from pipeline import (
     TIMESTAMP_FORMAT,
     FatalAPIError,
     build_transcript_index,
+    configure_claude,
     configure_gemini,
     discover_recent_folders,
     get_audio_timestamp,
@@ -152,6 +153,7 @@ def run_scan_cycle(state, transcript_index, cycle_number):
 
 def main():
     configure_gemini()
+    configure_claude()
 
     print("=" * 60, flush=True)
     print("🎙️  Auto-Transcription Service", flush=True)

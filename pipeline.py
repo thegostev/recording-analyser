@@ -19,8 +19,11 @@ from config import (
     ANALYSIS_MODEL,
     ANALYSIS_PROMPT,
     ANALYSIS_RETRY_BACKOFF,
+    ANTHROPIC_API_KEY,
     API_KEY,
     API_TIMEOUT,
+    CLAUDE_FALLBACK_MODEL,
+    CLAUDE_RETRY_BACKOFF,
     FAILED_ANALYSIS_LOG,
     FOLDERS,
     MAX_RETRIES,
@@ -34,6 +37,7 @@ from config import (
 TIMESTAMP_FORMAT = "%y-%m-%d %H.%M"
 
 _gemini_configured = False
+_claude_client = None
 
 
 def configure_gemini():
@@ -42,6 +46,21 @@ def configure_gemini():
     if not _gemini_configured:
         genai.configure(api_key=API_KEY)
         _gemini_configured = True
+
+
+def configure_claude():
+    """Configure Claude API client (optional — skipped if key absent or package missing)."""
+    global _claude_client
+    if not ANTHROPIC_API_KEY:
+        print("ℹ️  ANTHROPIC_API_KEY not set — Claude analysis fallback disabled", flush=True)
+        return
+    try:
+        import anthropic
+
+        _claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        print(f"✅ Claude fallback configured ({CLAUDE_FALLBACK_MODEL})", flush=True)
+    except ImportError:
+        print("⚠️  anthropic package not installed — Claude fallback disabled", flush=True)
 
 
 # ============================================================================
@@ -444,16 +463,75 @@ def transcribe_with_retry(audio_file):
     raise RuntimeError(f"Transcription failed after {MAX_RETRIES} attempts")
 
 
-def analyze_with_retry(transcript_content):
-    """Call analysis model with retry. Returns analysis text or None."""
-    for attempt in range(MAX_RETRIES):
-        try:
-            if attempt > 0:
-                delay = ANALYSIS_RETRY_BACKOFF[min(attempt - 1, len(ANALYSIS_RETRY_BACKOFF) - 1)]
-                print(f"   ⏳ Analysis retry {attempt + 1}/{MAX_RETRIES} in {delay}s...", flush=True)
-                time.sleep(delay)
+def analyze_with_claude(transcript_content: str) -> str | None:
+    """Single analysis attempt via Claude API. Returns text or None — never raises."""
+    if _claude_client is None:
+        return None
+    try:
+        prompt = f"{ANALYSIS_PROMPT}\n\n---TRANSCRIPT TO ANALYZE---\n{transcript_content}"
+        message = _claude_client.messages.create(
+            model=CLAUDE_FALLBACK_MODEL,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if message.content and hasattr(message.content[0], "text"):
+            return message.content[0].text
+        return None
+    except Exception as e:
+        print(f"   ❌ Claude analysis failed: {e}", flush=True)
+        return None
 
-            print(f"   📊 Analyzing transcript (attempt {attempt + 1}/{MAX_RETRIES})...", flush=True)
+
+def analyze_with_retry(transcript_content: str) -> str | None:
+    """Call analysis model with retry and optional Claude fallback.
+
+    When ANTHROPIC_API_KEY is set, attempt sequence is:
+        Gemini → Claude → Claude → Gemini → Gemini
+    Otherwise falls back to the original Gemini-only chain.
+
+    Returns analysis text or None.
+    """
+    use_claude = _claude_client is not None
+
+    if use_claude:
+        claude_backoff = CLAUDE_RETRY_BACKOFF[0] if CLAUDE_RETRY_BACKOFF else 10
+        gemini_backoff = ANALYSIS_RETRY_BACKOFF[0] if ANALYSIS_RETRY_BACKOFF else 60
+        # (provider, seconds_to_wait_before_this_attempt)
+        schedule = [
+            ("gemini", 0),
+            ("claude", 0),
+            ("claude", claude_backoff),
+            ("gemini", 0),
+            ("gemini", gemini_backoff),
+        ]
+    else:
+        # Original Gemini-only chain
+        schedule = [
+            ("gemini", 0 if i == 0 else ANALYSIS_RETRY_BACKOFF[min(i - 1, len(ANALYSIS_RETRY_BACKOFF) - 1)])
+            for i in range(MAX_RETRIES)
+        ]
+
+    total = len(schedule)
+
+    for attempt_idx, (provider, wait_before) in enumerate(schedule):
+        attempt_num = attempt_idx + 1
+        provider_label = "Gemini" if provider == "gemini" else "Claude"
+
+        if wait_before > 0:
+            print(f"   ⏳ Analysis attempt {attempt_num}/{total} [{provider_label}] in {wait_before}s...", flush=True)
+            time.sleep(wait_before)
+
+        print(f"   📊 Analyzing transcript [{provider_label}] (attempt {attempt_num}/{total})...", flush=True)
+
+        if provider == "claude":
+            result = analyze_with_claude(transcript_content)
+            if result is not None:
+                print(f"   ✅ Analysis succeeded via Claude (attempt {attempt_num}/{total})", flush=True)
+                return result
+            continue  # error already logged inside analyze_with_claude
+
+        # Gemini path
+        try:
             model = genai.GenerativeModel(ANALYSIS_MODEL)
             prompt = f"{ANALYSIS_PROMPT}\n\n---TRANSCRIPT TO ANALYZE---\n{transcript_content}"
             response = model.generate_content(
@@ -468,9 +546,9 @@ def analyze_with_retry(transcript_content):
             error_class = classify_api_error(e)
             if error_class == "fatal":
                 raise FatalAPIError(f"Authentication/permission error: {e}") from e
-            print(f"   ❌ Analysis attempt {attempt + 1} failed: {e}", flush=True)
+            print(f"   ❌ Analysis attempt {attempt_num}/{total} [Gemini] failed: {e}", flush=True)
 
-    print(f"   ⚠️  Analysis failed after {MAX_RETRIES} attempts (transcript was saved)", flush=True)
+    print(f"   ⚠️  Analysis failed after {total} attempts (transcript was saved)", flush=True)
     return None
 
 

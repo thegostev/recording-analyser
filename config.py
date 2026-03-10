@@ -46,6 +46,9 @@ def load_config(config_path: Path = _CONFIG_FILE) -> dict[str, Any]:
         sys.exit(1)
     cfg["api_key"] = api_key
 
+    # Anthropic API key: optional — Claude fallback disabled if absent
+    cfg["anthropic_api_key"] = os.environ.get("ANTHROPIC_API_KEY", "")
+
     # Expand ~ in path values
     cfg["watch_folder"] = os.path.expanduser(cfg["watch_folder"])
     cfg["state_file"] = os.path.expanduser(cfg.get("state_file", "~/.meeting_transcriber_state.json"))
@@ -62,8 +65,10 @@ _cfg = load_config()
 
 # ---------- Export as module-level constants ----------
 API_KEY: str = _cfg["api_key"]
+ANTHROPIC_API_KEY: str = _cfg["anthropic_api_key"]
 TRANSCRIPTION_MODEL: str = _cfg.get("transcription_model", "gemini-3-flash-preview")
 ANALYSIS_MODEL: str = _cfg.get("analysis_model", "gemini-3-pro-preview")
+CLAUDE_FALLBACK_MODEL: str = _cfg.get("claude_fallback_model", "claude-sonnet-4-6")
 
 WATCH_FOLDER: str = _cfg["watch_folder"]
 FOLDERS: dict[str, str] = _cfg["folders"]
@@ -81,4 +86,5 @@ MAX_RETRIES: int = _cfg.get("max_retries", 3)
 MAX_FILES_PER_CYCLE: int = _cfg.get("max_files_per_cycle", 5)
 RETRY_BACKOFF: list[int] = _cfg.get("retry_backoff", [10, 30, 60])
 ANALYSIS_RETRY_BACKOFF: list[int] = _cfg.get("analysis_retry_backoff", [60, 180, 300])
+CLAUDE_RETRY_BACKOFF: list[int] = _cfg.get("claude_retry_backoff", [10])
 API_TIMEOUT: int = _cfg.get("api_timeout", 300)

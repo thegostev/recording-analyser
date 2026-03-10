@@ -48,6 +48,23 @@ tail -f /tmp/transcriber.err                     # stderr
 python -m pytest tests/ -v
 ```
 
+## Generating missing analysis without the script
+
+If a transcript exists but its analysis file is missing (e.g. after a 503 Gemini overload), **don't re-run the script**. It's faster to do it inline in the Claude session:
+
+1. Read the transcript file from the vault
+2. Generate analysis following the `analysis_prompt` in `config.yaml` (topic groups, emoji states, natural language, no corporate sanitizing — see the prompt for full style rules)
+3. Write the analysis file to the correct vault folder using the naming convention: `[transcript filename] - Analysis.md`
+
+Vault folder paths per category (from `config.yaml`):
+- **MUSIKKERE** → `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Musikkere - Obsidian/* Meetings/analysis/`
+- **MINNESOTERE** → `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Minnesotere - Obsidian/3 - Meetings/analysis/`
+- **PERSONLIG** → `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Personlig - Obsidian/Machinery dept./* Meetings/Personlig/analysis/`
+- **INTERVJUER** → `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Personlig - Obsidian/Machinery dept./* Meetings/Intervjuer/analysis/`
+- **DEFAULT** → `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Personlig - Obsidian/Machinery dept./* Meetings/analysis/`
+
+Multiple transcripts can be read in parallel; write analysis files as each one is ready. No state file update needed — the daemon's transcript index rebuilds from the filesystem on the next scan.
+
 ## Known technical debt
 
 - **Minimal test suite** — infrastructure smoke tests exist but no tests for core pipeline functions (see RA-003, RA-004, RA-005)

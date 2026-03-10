@@ -17,6 +17,7 @@ from pipeline import (
     FatalAPIError,
     analyze_with_retry,
     build_transcript_index,
+    configure_claude,
     configure_gemini,
     discover_recent_folders,
     get_audio_timestamp,
@@ -220,6 +221,7 @@ Examples:
         sys.exit(1)
 
     configure_gemini()
+    configure_claude()
 
     print("=" * 60)
     print("📼 On-Demand Audio Transcription & Analysis")
