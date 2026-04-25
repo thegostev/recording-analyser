@@ -12,16 +12,18 @@ Three rules at every level:
 ## Level 0 — System
 
 **RecordingAnalyser**: Automated audio transcription and analysis service
-that ingests recordings from Just Press Record, transcribes and classifies
-them via Gemini API, and outputs structured Markdown notes to categorized
-Obsidian vaults.
+that ingests recordings from Just Press Record, transcribes them locally
+via Whisper, classifies and analyses them via Gemini Pro / Claude, and
+outputs structured Markdown notes to categorized Obsidian vaults.
 
 **System boundary**:
 - Inside: audio discovery, transcription, classification, analysis,
   file output, state tracking, maintenance/repair tools
-- Outside: Just Press Record app (audio capture), Gemini API (ML models),
-  Obsidian (rendering/search), iCloud (file sync), launchd (process
-  management)
+- Outside: Just Press Record app (audio capture), faster-whisper /
+  Whisper model (local ML inference), Ollama (local LLM, primary analysis),
+  Gemini API (analysis, optional cloud fallback), Claude API (analysis
+  fallback, optional), Obsidian (rendering/search), iCloud (file sync),
+  launchd (process management)
 
 **Stakeholders**:
 - Owner/operator: single user (TPM) who records meetings and reviews
@@ -105,32 +107,41 @@ folder to find unprocessed `.m4a` files.
 - **Internal data model**: list of `(file_path, timestamp)` tuples
 - **Dependencies**: S3 (state + transcript index for filtering)
 
-### S1.M2: AI API Integration
+### S1.M2: AI Integration
 
-Manages all communication with AI providers: Gemini API for transcription
-and primary analysis; Claude API as a fallback when Gemini analysis fails.
+Manages local Whisper transcription and all communication with AI
+providers. Analysis provider is configurable: Ollama (local, default)
+or Gemini Pro (cloud, optional). Claude API is an optional fallback
+in Gemini mode only.
 
-- **Public interface**: `upload_to_gemini(file_path)`,
-  `transcribe_with_retry(audio_file)`,
+- **Public interface**: `configure_whisper()`, `transcribe_local(file_path)`,
+  `configure_gemini()`, `configure_claude()`, `configure_ollama()`,
   `analyze_with_retry(transcript_content)`,
+  `analyze_with_ollama(transcript_content)`,
   `analyze_with_claude(transcript_content)`,
-  `extract_response_text(response)`,
-  `configure_gemini()`, `configure_claude()`
-- **Internal data model**: Gemini `File` objects, `GenerateContentResponse`,
-  Anthropic `Message` objects; `_claude_client` module singleton
-- **Dependencies**: `google.generativeai` SDK, `anthropic` SDK,
-  `GEMINI_API_KEY` (required), `ANTHROPIC_API_KEY` (optional)
-- **Fallback behaviour**: `analyze_with_retry()` tries Gemini first; on
-  failure immediately switches to Claude (×2), then returns to Gemini (×2).
-  If `ANTHROPIC_API_KEY` is absent, original Gemini-only chain is used.
+  `extract_response_text(response)`
+- **Internal data model**: `_whisper_model` singleton (`WhisperModel`),
+  `_ollama_client` singleton, `_claude_client` singleton,
+  `GenerateContentResponse`, Anthropic `Message` objects
+- **Dependencies**: `faster-whisper`, `ollama` SDK (optional),
+  `google.generativeai` SDK (optional), `anthropic` SDK (optional),
+  `GEMINI_API_KEY` (required only when `analysis_provider: gemini`),
+  `ANTHROPIC_API_KEY` (optional), `ffmpeg` (required for audio decoding)
+- **Transcription**: `transcribe_local()` calls `_whisper_model.transcribe()`
+  with VAD filtering; returns `[MM:SS] text` formatted markdown
+- **Analysis provider dispatch** (`analyze_with_retry()`):
+  - `ollama` mode (default): Ollama → Ollama(60s) → Ollama(180s) → Ollama(300s)
+  - `gemini` mode + Claude key: Gemini → Claude → Claude(10s) → Gemini → Gemini(60s)
+  - `gemini` mode only: Gemini → Gemini(60s) → Gemini(180s) → Gemini(300s)
 
-### S1.M3: Classification & Parsing
+### S1.M3: Parsing
 
-Parses the structured response from the Flash model to extract
-category, filename, and transcript content.
+Parses raw Whisper output and structured AI analysis responses into
+usable data. Classification is embedded in the analysis response
+(CATEGORY + FILENAME extracted here, not in S1.M2).
 
-- **Public interface**: `parse_transcription_response(response_text)` →
-  `(category, filename, transcript)`
+- **Public interface**: `parse_transcript(content)` → `str`;
+  `parse_analysis_response(content)` → `(category, filename, analysis)`
 - **Internal data model**: category keyword map (`FOLDERS` dict)
 - **Dependencies**: none (pure parsing logic)
 
@@ -199,10 +210,12 @@ prevent re-processing.
 
 > **Quality coverage checkpoint (L2)**:
 > S1.M1: Filters `.icloud`, `.tmp`, hidden files; stability check (2s).
-> S1.M2: 3-tier error classification; retry with backoff [10,30,60]s
-> transcription; analysis uses G→C→C→G→G sequence when Claude key is set,
-> or Gemini-only [60,180,300]s chain otherwise.
-> S1.M3: Falls back to DEFAULT on parse failure.
+> S1.M2: Whisper errors classified as PermanentFileError (bad/silent audio)
+> or RuntimeError (model not loaded); analysis uses G→C→C→G→G sequence
+> when Claude key is set, or Gemini-only [60,180,300]s chain otherwise.
+> S1.M3: `parse_analysis_response()` falls back to DEFAULT + "Unknown
+> Meeting" on parse failure; strips CATEGORY/FILENAME header if
+> `---ANALYSIS---` marker absent.
 > S1.M4: Creates directories on demand; handles filename collisions
 > with `(2)`, `(3)` suffix.
 > S2.M1: Rate-limited (90s between files, 5 files/cycle cap).
@@ -235,24 +248,27 @@ prevent re-processing.
   fallback: macOS `mdls` → directory/filename parse → `os.path.getctime`
 - **Error taxonomy**: returns `None` if all strategies fail
 
-### S1.M2.C1: File Uploader
-- **File(s)**: `auto_transcribe.py` — `upload_to_gemini()`
-- **Interface contract**: `(file_path)` → Gemini `File` object (active
-  state); polls until processing complete
-- **Error taxonomy**: `FatalAPIError` (auth), transient API errors
-  (retried by caller)
+### S1.M2.C1: Whisper Model Manager
+- **File(s)**: `pipeline.py` — `configure_whisper()`, `_whisper_model` singleton
+- **Interface contract**: `configure_whisper()` loads `WhisperModel` once
+  at startup (idempotent); model held in `_whisper_model` module-level
+  variable for reuse across all files in a session
+- **Error taxonomy**: `RuntimeError` if model not loaded at call time;
+  model download on first run (~3GB for large-v3)
 
-### S1.M2.C2: Transcription Caller
-- **File(s)**: `auto_transcribe.py` — `transcribe_with_retry()`
-- **Interface contract**: `(audio_file)` → raw response text from
-  Flash model; retries 3× with [10,30,60]s backoff
-- **Error taxonomy**: `FatalAPIError` (stops service),
-  `PermanentFileError` (skip file), transient (retry then raise)
+### S1.M2.C2: Local Transcriber
+- **File(s)**: `pipeline.py` — `transcribe_local(file_path)`
+- **Interface contract**: `(file_path)` → `str` formatted as
+  `[MM:SS] text` per segment; VAD-filtered (silences skipped)
+- **Error taxonomy**: `PermanentFileError` on audio decode failure or
+  empty output (silent/corrupt file); no retry (local failures are
+  deterministic)
 
 ### S1.M2.C3: Analysis Caller
 - **File(s)**: `pipeline.py` — `analyze_with_retry()`
-- **Interface contract**: `(transcript_content)` → analysis text from
-  Pro model with Claude fallback; attempt sequence (Claude configured):
+- **Interface contract**: `(transcript_content)` →
+  `(category, filename, analysis_text) | None` from Pro model with
+  Claude fallback; attempt sequence (Claude configured):
   Gemini → Claude → Claude → Gemini → Gemini
 - **Error taxonomy**: Gemini fatal errors stop service; Claude errors are
   non-fatal (return None); on full exhaustion returns None gracefully
@@ -266,13 +282,29 @@ prevent re-processing.
 - **Error taxonomy**: all Anthropic SDK errors caught and logged; returns
   None (non-fatal); ImportError on missing package also caught gracefully
 
-### S1.M3.C1: Response Parser
-- **File(s)**: `auto_transcribe.py` — `parse_transcription_response()`
-- **Interface contract**: `(response_text)` →
-  `(category, filename, transcript)` tuple; expects
-  `CATEGORY: ...\nFILENAME: ...\n---TRANSCRIPT---\n...`
-- **Error taxonomy**: returns `("DEFAULT", "Unknown Meeting", raw_text)`
-  on parse failure
+### S1.M2.C5: Ollama Analysis Provider
+- **File(s)**: `pipeline.py` — `configure_ollama()`, `analyze_with_ollama()`
+- **Interface contract**: `configure_ollama()` initialises `ollama.Client`
+  at startup (no-op if `analysis_provider != "ollama"` or package missing);
+  `analyze_with_ollama(transcript_content)` → `(category, filename, analysis)` or None,
+  never raises
+- **Error taxonomy**: all errors (ConnectionError, ResponseError, etc.) are
+  transient — no fatal errors possible with local inference; returns None on
+  any failure so `analyze_with_retry()` retries with backoff
+
+### S1.M3.C1: Transcript Parser
+- **File(s)**: `pipeline.py` — `parse_transcript()`
+- **Interface contract**: `(content)` → `str`; strips leading/trailing
+  whitespace from raw Whisper output
+- **Error taxonomy**: always succeeds (pure string operation)
+
+### S1.M3.C2: Analysis Response Parser
+- **File(s)**: `pipeline.py` — `parse_analysis_response()`
+- **Interface contract**: `(content)` → `(category, filename, analysis)`
+  tuple; expects `CATEGORY: ...\nFILENAME: ...\n---ANALYSIS---\n...`
+- **Error taxonomy**: returns `("DEFAULT", "Unknown Meeting.md", stripped_text)`
+  on parse failure; strips CATEGORY/FILENAME lines from body if
+  `---ANALYSIS---` marker absent
 
 ### S1.M4.C1: Markdown Writer
 - **File(s)**: `auto_transcribe.py` — `save_transcript()`,
@@ -293,9 +325,10 @@ prevent re-processing.
 ### S2.M3.C1: Reclassifier
 - **File(s)**: `reclassify_and_fix.py` — `reclassify_transcript()`,
   `move_transcript_and_analysis()`
-- **Interface contract**: `(transcript_path, dry_run)` → re-calls
-  Flash model for classification, moves files to new category folder
-- **Error taxonomy**: API errors (same as S1.M2); file collision
+- **Interface contract**: `(transcript_path, dry_run)` → calls
+  Gemini Pro (via `ANALYSIS_MODEL`) with `ANALYSIS_PROMPT` on existing
+  transcript text to re-classify; moves files to new category folder
+- **Error taxonomy**: API errors (same as S1.M2.C3); file collision
   handled with `(2)` suffix
 
 ### S2.M3.C2: Filename Fixer
@@ -316,8 +349,16 @@ prevent re-processing.
 > **Quality coverage checkpoint (L3)**:
 > S1.M1.C3: Timestamp extraction duplicated across 3 files — candidate
 > for extraction into shared module.
-> S1.M2.C1-C3: Retry/backoff logic fully specified per component.
-> S1.M3.C1: Fallback to DEFAULT prevents data loss on parse failure.
+> S1.M2.C1: Whisper model loaded once at startup; `RuntimeError` on
+> missing model is fatal (service does not start without Whisper).
+> S1.M2.C2: `PermanentFileError` on bad audio prevents retry loops;
+> VAD filter reduces hallucinations on silent passages.
+> S1.M2.C3: Retry/backoff fully specified; provider selected by
+> `ANALYSIS_PROVIDER` config; returns None gracefully on total exhaustion —
+> transcript still saved to DEFAULT.
+> S1.M2.C5: All Ollama errors are transient; no fatal error path.
+> S1.M3.C1-C2: Fallback to DEFAULT + "Unknown Meeting.md" prevents data
+> loss on parse failure.
 > S3.M1.C1: Self-healing on corrupt state (returns empty dict).
 > S2.M3.C1-C3: All support `--dry-run`; destructive ops verified first.
 
@@ -326,6 +367,12 @@ prevent re-processing.
 ## Dependency Map
 
 ```
+ ┌─────────────┐   ┌──────────────────────────────────────┐
+ │  Whisper    │   │  Ollama (local, default)              │
+ │ (local ML)  │   │  Gemini Pro / Claude (cloud, optional)│
+ └──────┬──────┘   └──────────┬───────────────────────────┘
+        │ transcribe           │ analyze + classify
+        ▼                      ▼
                     ┌──────────────────────────────────────────┐
                     │           S2: Service Orchestration       │
                     │                                          │
@@ -338,10 +385,11 @@ prevent re-processing.
 ┌──────────────────────────────────────────────────────────────┐
 │                  S1: Transcription Pipeline                   │
 │                                                              │
-│  S1.M1 Audio       S1.M2 Gemini API    S1.M3 Classification │
-│  Discovery    ───► Integration     ───► & Parsing            │
-│                                              │               │
-│                                              ▼               │
+│  S1.M1 Audio       S1.M2 AI          S1.M3 Parsing          │
+│  Discovery    ───► Integration   ───► (transcript +          │
+│                   (Whisper +          analysis response)     │
+│                    Gemini/Claude)          │                  │
+│                                           ▼                  │
 │                                    S1.M4 File Output         │
 └──────────────────────┬───────────────────────────────────────┘
                        │ reads/writes

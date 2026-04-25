@@ -35,18 +35,12 @@ def load_config(config_path: Path = _CONFIG_FILE) -> dict[str, Any]:
     with open(config_path, "r", encoding="utf-8") as f:
         cfg: dict[str, Any] = yaml.safe_load(f)
 
-    # API key: environment variable only (constitution §IV)
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        print(
-            "ERROR: GEMINI_API_KEY environment variable is required.\n"
-            "Set it in your shell profile or launchd plist EnvironmentVariables.",
-            flush=True,
-        )
+        print("ERROR: GEMINI_API_KEY environment variable is not set.", flush=True)
         sys.exit(1)
     cfg["api_key"] = api_key
 
-    # Anthropic API key: optional — Claude fallback disabled if absent
     cfg["anthropic_api_key"] = os.environ.get("ANTHROPIC_API_KEY", "")
 
     # Expand ~ in path values
@@ -65,17 +59,26 @@ _cfg = load_config()
 
 # ---------- Export as module-level constants ----------
 API_KEY: str = _cfg["api_key"]
-ANTHROPIC_API_KEY: str = _cfg["anthropic_api_key"]
-TRANSCRIPTION_MODEL: str = _cfg.get("transcription_model", "gemini-3-flash-preview")
-ANALYSIS_MODEL: str = _cfg.get("analysis_model", "gemini-3-pro-preview")
-CLAUDE_FALLBACK_MODEL: str = _cfg.get("claude_fallback_model", "claude-sonnet-4-6")
+TRANSCRIPTION_MODEL: str = _cfg.get("transcription_model", "gemini-2.5-flash")
+TRANSCRIPTION_PROMPT: str = _cfg["transcription_prompt"]
+ANALYSIS_PROVIDER: str = _cfg.get("analysis_provider", "ollama")
+OLLAMA_MODEL: str = _cfg.get("ollama_model", "qwen3.5:9b")
+OLLAMA_HOST: str = _cfg.get("ollama_host", "http://localhost:11434")
+OLLAMA_THINKING: bool = _cfg.get("ollama_thinking", False)
+OLLAMA_TIMEOUT: int = _cfg.get("ollama_timeout", 600)
+OLLAMA_NUM_CTX: int = _cfg.get("ollama_num_ctx", 16384)
+OLLAMA_KEEP_ALIVE: int = _cfg.get("ollama_keep_alive", 300)
+WHISPER_BACKEND: str = _cfg.get("whisper_backend", "parakeet")
+WHISPER_MODEL: str = _cfg.get("whisper_model", "mlx-community/parakeet-tdt-0.6b-v2")
+WHISPER_FALLBACK_MODEL: str = _cfg.get("whisper_fallback_model", "mlx-community/whisper-large-v3-turbo")
+WHISPER_DEVICE: str = _cfg.get("whisper_device", "cpu")
+WHISPER_COMPUTE_TYPE: str = _cfg.get("whisper_compute_type", "int8")
 
 WATCH_FOLDER: str = _cfg["watch_folder"]
 FOLDERS: dict[str, str] = _cfg["folders"]
 STATE_FILE: str = _cfg["state_file"]
 FAILED_ANALYSIS_LOG: str = _cfg["failed_analysis_log"]
 
-TRANSCRIPTION_PROMPT: str = _cfg["transcription_prompt"]
 ANALYSIS_PROMPT: str = _cfg["analysis_prompt"]
 
 # Service behavior
@@ -86,5 +89,4 @@ MAX_RETRIES: int = _cfg.get("max_retries", 3)
 MAX_FILES_PER_CYCLE: int = _cfg.get("max_files_per_cycle", 5)
 RETRY_BACKOFF: list[int] = _cfg.get("retry_backoff", [10, 30, 60])
 ANALYSIS_RETRY_BACKOFF: list[int] = _cfg.get("analysis_retry_backoff", [60, 180, 300])
-CLAUDE_RETRY_BACKOFF: list[int] = _cfg.get("claude_retry_backoff", [10])
 API_TIMEOUT: int = _cfg.get("api_timeout", 300)

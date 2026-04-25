@@ -4,15 +4,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.transcriber.pid"
 LOG_FILE="$SCRIPT_DIR/transcriber.log"
 
+# Disable XetHub download protocol — incompatible with Python 3.9 threading
+export HF_HUB_DISABLE_XET=1
+
 start() {
     if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
         echo "Already running (PID $(cat "$PID_FILE"))"
         return 1
     fi
 
+    [ -f "$SCRIPT_DIR/.env" ] && set -a && source "$SCRIPT_DIR/.env" && set +a
+
     cd "$SCRIPT_DIR"
-    source venv/bin/activate
-    nohup python auto_transcribe.py >> "$LOG_FILE" 2>&1 &
+    nohup "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/auto_transcribe.py" >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     echo "Started (PID $!, log: $LOG_FILE)"
 }
@@ -52,40 +56,34 @@ logs() {
 catchup() {
     DAYS=${1:-7}
     cd "$SCRIPT_DIR"
-    source venv/bin/activate
-    python ondemand_transcribe.py --catchup $DAYS
+    "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/ondemand_transcribe.py" --catchup $DAYS
 }
 
 catchup_preview() {
     DAYS=${1:-7}
     cd "$SCRIPT_DIR"
-    source venv/bin/activate
-    python ondemand_transcribe.py --catchup $DAYS --dry-run
+    "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/ondemand_transcribe.py" --catchup $DAYS --dry-run
 }
 
 reprocess() {
     DAYS=${1:-7}
     cd "$SCRIPT_DIR"
-    source venv/bin/activate
-    python ondemand_transcribe.py --catchup $DAYS --reprocess-partial
+    "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/ondemand_transcribe.py" --catchup $DAYS --reprocess-partial
 }
 
 fix_analysis() {
     cd "$SCRIPT_DIR"
-    source venv/bin/activate
-    python reclassify_and_fix.py --generate-missing-analysis "$@"
+    "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/reclassify_and_fix.py" --generate-missing-analysis "$@"
 }
 
 fix_categories() {
     cd "$SCRIPT_DIR"
-    source venv/bin/activate
-    python reclassify_and_fix.py --reclassify "$@"
+    "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/reclassify_and_fix.py" --reclassify "$@"
 }
 
 fix_all() {
     cd "$SCRIPT_DIR"
-    source venv/bin/activate
-    python reclassify_and_fix.py --generate-missing-analysis --reclassify "$@"
+    "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/reclassify_and_fix.py" --generate-missing-analysis --reclassify "$@"
 }
 
 case "${1:-start}" in

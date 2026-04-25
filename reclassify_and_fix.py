@@ -17,15 +17,13 @@ import shutil
 import sys
 import time
 
-import google.generativeai as genai
-from google.generativeai.types import RequestOptions
-
-from config import API_TIMEOUT, DELAY_BETWEEN_FILES, FOLDERS, TRANSCRIPTION_MODEL
+from config import DELAY_BETWEEN_FILES, FOLDERS
 from pipeline import (
     analyze_with_retry,
+    configure_claude,
     configure_gemini,
-    extract_response_text,
-    parse_transcription_response,
+    configure_ollama,
+    parse_analysis_response,
     save_analysis,
 )
 
@@ -71,9 +69,10 @@ def generate_missing_analysis(transcript_path, category, dry_run=False, verbose=
         if verbose:
             print(f"  Generating analysis for: {filename}...", flush=True)
 
-        analysis_text = analyze_with_retry(transcript_content)
+        result = analyze_with_retry(transcript_content)
 
-        if analysis_text:
+        if result:
+            _, _, analysis_text = result  # category/filename from disk location — don't relocate
             analysis_path = save_analysis(category, filename, analysis_text)
             if analysis_path:
                 if verbose:
@@ -112,23 +111,11 @@ def reclassify_transcript(transcript_path, dry_run=False, verbose=False):
         if dry_run:
             print(f"  [DRY RUN] Would classify transcript: {filename}", flush=True)
 
-        model = genai.GenerativeModel(TRANSCRIPTION_MODEL)
-        from config import TRANSCRIPTION_PROMPT
-
-        classification_prompt = (
-            f"{TRANSCRIPTION_PROMPT}\n\n"
-            f"---TRANSCRIPT TO CLASSIFY---\n{transcript_content}\n\n"
-            f"Please classify this transcript and provide:\n"
-            f"1. CATEGORY (PERSONLIG/MINNESOTERE/MUSIKKERE/INTERVJUER/DEFAULT)\n"
-            f"2. FILENAME in format: [Meeting Name] - [Topic 1, Topic 2, Topic 3]"
-        )
-
-        response = model.generate_content(
-            classification_prompt,
-            request_options=RequestOptions(timeout=API_TIMEOUT),
-        )
-        response_text = extract_response_text(response)
-        category, suggested_filename, _ = parse_transcription_response(response_text)
+        result = analyze_with_retry(transcript_content)
+        if result is None:
+            print(f"  ❌ Analysis returned no result for: {filename}", flush=True)
+            return None
+        category, suggested_filename, _ = result
 
         if verbose:
             print(f"  → Classified as: {category} | {suggested_filename}", flush=True)
@@ -254,7 +241,9 @@ def main():
         print("\n⚠️  Please specify at least one operation: --generate-missing-analysis or --reclassify")
         sys.exit(1)
 
-    configure_gemini()
+    # configure_gemini()  # disabled
+    # configure_claude()  # disabled
+    configure_ollama()
 
     print("=" * 60)
     print("🔧 MeetingTranscriber Maintenance")
@@ -287,7 +276,7 @@ def main():
                     failed_count += 1
 
                 if i < len(missing) and not args.dry_run:
-                    print(f"  ⏸️  Pausing {DELAY_BETWEEN_FILES}s (pro-tier quota)...", flush=True)
+                    print(f"  ⏸️  Pausing {DELAY_BETWEEN_FILES}s between files...", flush=True)
                     time.sleep(DELAY_BETWEEN_FILES)
 
             print(f"\n📊 Results: ✅ {success_count} success, ❌ {failed_count} failed")

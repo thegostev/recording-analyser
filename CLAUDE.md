@@ -65,6 +65,29 @@ Vault folder paths per category (from `config.yaml`):
 
 Multiple transcripts can be read in parallel; write analysis files as each one is ready. No state file update needed — the daemon's transcript index rebuilds from the filesystem on the next scan.
 
+## Recovering from quota exhaustion (429 errors)
+
+When the Gemini free-tier daily quota is hit, files that failed at **transcription** are simply absent from the state file — the daemon will retry them automatically on the next scan cycle once quota resets (usually next UTC day). No action needed.
+
+Files that failed at **analysis** (transcript saved but analysis 429'd) are saved as `failed_permanent` in `~/.meeting_transcriber_state.json` and **won't be retried automatically**. Clear them so the daemon can re-process:
+
+```python
+python3 -c "
+import json, os
+path = os.path.expanduser('~/.meeting_transcriber_state.json')
+with open(path) as f:
+    state = json.load(f)
+removed = [k for k, v in state['processed'].items() if v.get('status') == 'failed_permanent']
+for k in removed:
+    del state['processed'][k]
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+print(f'Cleared {len(removed)} entries')
+"
+```
+
+The daemon picks them up on the next 30s scan cycle. Also: `failed_permanent` entries accumulate over time — run this cleanup proactively whenever a quota issue is reported.
+
 ## Known technical debt
 
 - **Minimal test suite** — infrastructure smoke tests exist but no tests for core pipeline functions (see RA-003, RA-004, RA-005)

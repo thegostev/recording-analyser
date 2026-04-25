@@ -3,64 +3,194 @@
 All entry points (daemon, on-demand CLI, maintenance CLI) import from here.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
 import subprocess
 import time
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import google.generativeai as genai
-from google.api_core import exceptions as api_exceptions
-from google.generativeai.types import RequestOptions
+from faster_whisper import WhisperModel
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types as genai_types
+
+try:
+    import ollama as _ollama_lib
+    import httpx as _httpx
+    _OLLAMA_AVAILABLE = True
+except ImportError:
+    _httpx = None
+    _OLLAMA_AVAILABLE = False
+
+try:
+    import mlx_whisper as _mlx_whisper
+    _MLX_AVAILABLE = True
+except ImportError:
+    _MLX_AVAILABLE = False
+
+try:
+    import parakeet_mlx as _parakeet_mlx
+    _PARAKEET_AVAILABLE = True
+except ImportError:
+    _PARAKEET_AVAILABLE = False
 
 from config import (
-    ANALYSIS_MODEL,
     ANALYSIS_PROMPT,
+    ANALYSIS_PROVIDER,
     ANALYSIS_RETRY_BACKOFF,
-    ANTHROPIC_API_KEY,
     API_KEY,
     API_TIMEOUT,
-    CLAUDE_FALLBACK_MODEL,
-    CLAUDE_RETRY_BACKOFF,
     FAILED_ANALYSIS_LOG,
     FOLDERS,
     MAX_RETRIES,
+    OLLAMA_HOST,
+    OLLAMA_KEEP_ALIVE,
+    OLLAMA_MODEL,
+    OLLAMA_NUM_CTX,
+    OLLAMA_THINKING,
+    OLLAMA_TIMEOUT,
     RETRY_BACKOFF,
     STATE_FILE,
     TRANSCRIPTION_MODEL,
     TRANSCRIPTION_PROMPT,
+    WHISPER_BACKEND,
+    WHISPER_COMPUTE_TYPE,
+    WHISPER_DEVICE,
+    WHISPER_FALLBACK_MODEL,
+    WHISPER_MODEL,
 )
 
 # Shared timestamp format for filenames: "YY-MM-DD HH.MM"
 TIMESTAMP_FORMAT = "%y-%m-%d %H.%M"
 
-_gemini_configured = False
-_claude_client = None
+# Parakeet allocates one Metal buffer for the full audio — files longer than this
+# exceed the GPU's 14 GB limit and cause an uncatchable C++ crash.
+PARAKEET_MAX_SECS: int = 15 * 60
+
+_ollama_client = None
+_whisper_model: WhisperModel | None = None
+_parakeet_model = None
+_mlx_fallback_loaded: bool = False
+_gemini_client: genai.Client | None = None
+
+
+def configure_whisper():
+    """Load transcription model into memory (idempotent — safe to call multiple times)."""
+    global _whisper_model, _parakeet_model
+
+    if WHISPER_BACKEND == "parakeet":
+        if _parakeet_model is not None:
+            return
+        if not _PARAKEET_AVAILABLE:
+            raise RuntimeError("parakeet-mlx not installed — run: pip install parakeet-mlx")
+        print(f"🎙️  Loading Parakeet model ({WHISPER_MODEL})...", flush=True)
+        _parakeet_model = _parakeet_mlx.from_pretrained(WHISPER_MODEL)
+        print("✅ Parakeet model loaded (Apple Silicon GPU)", flush=True)
+    elif WHISPER_BACKEND == "mlx":
+        if _whisper_model is not None:
+            return
+        if not _MLX_AVAILABLE:
+            raise RuntimeError("mlx-whisper not installed — run: pip install mlx-whisper")
+        print(f"🎙️  Loading Whisper model via MLX ({WHISPER_MODEL})...", flush=True)
+        import numpy as np
+        _mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo=WHISPER_MODEL, verbose=False)
+        _whisper_model = True  # sentinel — actual inference uses mlx_whisper.transcribe() directly
+        print("✅ Whisper model loaded (MLX — Apple Silicon GPU)", flush=True)
+    else:
+        if _whisper_model is not None:
+            return
+        print(f"🎙️  Loading Whisper model ({WHISPER_MODEL})...", flush=True)
+        _whisper_model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE)
+        print("✅ Whisper model loaded", flush=True)
+
+
+def _transcribe_with_mlx_fallback(file_path: str) -> list[str]:
+    """Transcribe using mlx-whisper fallback. Returns list of '[MM:SS] text' lines."""
+    global _mlx_fallback_loaded
+    if not _MLX_AVAILABLE:
+        raise RuntimeError("mlx-whisper not installed — cannot use as Parakeet fallback")
+    if not _mlx_fallback_loaded:
+        import numpy as np
+        print(f"   🔄 Loading mlx-whisper fallback ({WHISPER_FALLBACK_MODEL})...", flush=True)
+        _mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo=WHISPER_FALLBACK_MODEL, verbose=False)
+        _mlx_fallback_loaded = True
+    import os as _os
+    _os.environ["TQDM_DISABLE"] = "1"
+    result = _mlx_whisper.transcribe(file_path, path_or_hf_repo=WHISPER_FALLBACK_MODEL, verbose=False)
+    lines = []
+    for segment in result.get("segments", []):
+        ts = f"[{int(segment['start'] // 60):02d}:{int(segment['start'] % 60):02d}]"
+        lines.append(f"{ts} {segment['text'].strip()}")
+    return lines
 
 
 def configure_gemini():
-    """Configure Gemini API (idempotent — safe to call multiple times)."""
-    global _gemini_configured
-    if not _gemini_configured:
-        genai.configure(api_key=API_KEY)
-        _gemini_configured = True
-
-
-def configure_claude():
-    """Configure Claude API client (optional — skipped if key absent or package missing)."""
-    global _claude_client
-    if not ANTHROPIC_API_KEY:
-        print("ℹ️  ANTHROPIC_API_KEY not set — Claude analysis fallback disabled", flush=True)
+    """Configure Gemini API client (idempotent)."""
+    global _gemini_client
+    if _gemini_client is not None:
         return
-    try:
-        import anthropic
+    _gemini_client = genai.Client(api_key=API_KEY)
+    print(f"✅ Gemini configured (transcription: {TRANSCRIPTION_MODEL})", flush=True)
 
-        _claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        print(f"✅ Claude fallback configured ({CLAUDE_FALLBACK_MODEL})", flush=True)
-    except ImportError:
-        print("⚠️  anthropic package not installed — Claude fallback disabled", flush=True)
+
+def configure_ollama() -> None:
+    """Configure Ollama client, verify daemon + model, run warmup (idempotent)."""
+    global _ollama_client
+    if ANALYSIS_PROVIDER != "ollama":
+        return
+    if _ollama_client is not None:
+        return
+    if not _OLLAMA_AVAILABLE:
+        raise FatalAPIError("ollama package not installed — run: pip install ollama")
+
+    client = _ollama_lib.Client(host=OLLAMA_HOST, timeout=OLLAMA_TIMEOUT)
+
+    try:
+        client.list()
+    except Exception as e:
+        raise FatalAPIError(
+            f"Ollama daemon not reachable at {OLLAMA_HOST} ({type(e).__name__}). "
+            "Start it with: ollama serve"
+        )
+
+    try:
+        client.show(OLLAMA_MODEL)
+    except _ollama_lib.ResponseError as e:
+        raise FatalAPIError(
+            f"Ollama model '{OLLAMA_MODEL}' not found: {e}. "
+            f"Pull it with: ollama pull {OLLAMA_MODEL}"
+        )
+
+    print(f"   🔥 Warming up '{OLLAMA_MODEL}' (num_ctx={OLLAMA_NUM_CTX})...", flush=True)
+    try:
+        client.chat(
+            model=OLLAMA_MODEL,
+            messages=[{"role": "user", "content": "ping"}],
+            think=False,   # never think during warmup — avoids reasoning timeout
+            options=_ollama_lib.Options(num_ctx=OLLAMA_NUM_CTX),
+            keep_alive=OLLAMA_KEEP_ALIVE,
+        )
+    except Exception as e:
+        # Warmup failure is non-fatal — preflight passed, model is present.
+        # First analysis call will absorb the cold-start latency instead.
+        print(
+            f"   ⚠️  Ollama warmup timed out ({type(e).__name__}) — "
+            "service starting anyway; first analysis will be slower",
+            flush=True,
+        )
+
+    _ollama_client = client
+    print(
+        f"✅ Ollama ready ({OLLAMA_MODEL} @ {OLLAMA_HOST}, "
+        f"num_ctx={OLLAMA_NUM_CTX}, keep_alive={OLLAMA_KEEP_ALIVE}s, "
+        f"thinking={OLLAMA_THINKING}, timeout={OLLAMA_TIMEOUT}s)",
+        flush=True,
+    )
 
 
 # ============================================================================
@@ -76,51 +206,50 @@ class PermanentFileError(Exception):
     """Error specific to one file that retrying won't fix (bad format, etc)."""
 
 
-def classify_api_error(error):
-    """Classify a Gemini API error. Returns: "fatal", "permanent", "transient"."""
-    if isinstance(error, (api_exceptions.Unauthenticated, api_exceptions.PermissionDenied)):
-        return "fatal"
-    if isinstance(error, (api_exceptions.InvalidArgument, api_exceptions.BadRequest)):
-        return "permanent"
-    if isinstance(
-        error,
-        (
-            api_exceptions.ResourceExhausted,
-            api_exceptions.ServiceUnavailable,
-            api_exceptions.DeadlineExceeded,
-            api_exceptions.InternalServerError,
-        ),
-    ):
-        return "transient"
-    if isinstance(error, api_exceptions.GoogleAPICallError):
-        return "transient"
-    return "transient"
+def classify_api_error(error: Exception) -> Exception:
+    """Map a google.genai error to FatalAPIError, PermanentFileError, or return as-is."""
+    if isinstance(error, genai_errors.ClientError):
+        if error.code in (401, 403):
+            return FatalAPIError(f"Gemini API key rejected ({error.code}): {error}")
+        if error.code == 400:
+            return PermanentFileError(f"Bad request (bad file or prompt): {error}")
+    return error
 
 
-def extract_response_text(response):
-    """Safely extract text from a Gemini response. Raises ValueError if blocked/empty."""
-    if not response.candidates:
-        raise ValueError("Gemini returned no candidates (empty response)")
+def classify_ollama_error(error: Exception) -> tuple[str, bool]:
+    """Map an Ollama/httpx exception to (human_message, is_retryable)."""
+    if _httpx and isinstance(error, _httpx.TimeoutException):
+        return (
+            f"inference timed out after {OLLAMA_TIMEOUT}s — "
+            "consider raising ollama_timeout in config.yaml",
+            True,
+        )
+    if _httpx and isinstance(error, (_httpx.ConnectError, ConnectionError)):
+        return (
+            f"daemon became unreachable at {OLLAMA_HOST} — "
+            "check if Ollama is still running",
+            True,
+        )
+    if _OLLAMA_AVAILABLE and isinstance(error, _ollama_lib.ResponseError):
+        if "not found" in str(error).lower():
+            return (
+                f"model '{OLLAMA_MODEL}' was evicted and cannot reload — "
+                f"run: ollama pull {OLLAMA_MODEL}",
+                False,
+            )
+        return (f"Ollama API error: {error}", True)
+    return (f"unexpected error ({type(error).__name__}): {error}", True)
 
-    candidate = response.candidates[0]
-    finish_reason = getattr(candidate, "finish_reason", None)
 
-    if finish_reason is not None:
-        reason_name = finish_reason.name if hasattr(finish_reason, "name") else str(finish_reason)
-        if reason_name == "SAFETY":
-            raise ValueError(f"Response blocked by safety filter (finish_reason={reason_name})")
-        if reason_name == "OTHER":
-            raise ValueError(f"Response failed with finish_reason={reason_name}")
-
+def extract_response_text(response) -> str:
+    """Pull text out of a Gemini GenerateContentResponse, raising on empty/blocked."""
     try:
         text = response.text
-    except ValueError as e:
-        raise ValueError(f"Could not extract response text: {e}")
-
+    except Exception as e:
+        raise PermanentFileError(f"Could not extract response text: {e}") from e
     if not text or not text.strip():
-        raise ValueError("Gemini returned empty text")
-
-    return text
+        raise PermanentFileError("Gemini returned empty transcript")
+    return text.strip()
 
 
 # ============================================================================
@@ -218,8 +347,13 @@ def extract_section(content, start_marker, end_marker):
     return "\n".join(section_lines).strip()
 
 
-def parse_transcription_response(content):
-    """Parse CATEGORY, FILENAME, and transcript from Gemini response."""
+def parse_transcript(content: str) -> str:
+    """Extract raw transcript text from transcription model response."""
+    return content.strip()
+
+
+def parse_analysis_response(content: str) -> tuple[str, str, str]:
+    """Parse CATEGORY, FILENAME, and analysis body from analysis model response."""
     category = "DEFAULT"
     filename = "Unknown Meeting.md"
 
@@ -237,18 +371,18 @@ def parse_transcription_response(content):
                 extracted_name += ".md"
             filename = extracted_name
 
-    transcript_content = extract_section(content, "---TRANSCRIPT---", None)
+    analysis_content = extract_section(content, "---ANALYSIS---", None)
 
-    if not transcript_content:
-        clean_content_lines = []
-        for line in lines:
-            if not (line.startswith("CATEGORY:") or line.startswith("FILENAME:")):
-                clean_content_lines.append(line)
-        transcript_content = "\n".join(clean_content_lines).strip()
-        if transcript_content.startswith("---"):
-            transcript_content = transcript_content[3:].strip()
+    if not analysis_content:
+        clean_lines = [
+            line for line in lines
+            if not (line.startswith("CATEGORY:") or line.startswith("FILENAME:"))
+        ]
+        analysis_content = "\n".join(clean_lines).strip()
+        if analysis_content.startswith("---"):
+            analysis_content = analysis_content[3:].strip()
 
-    return category, filename, transcript_content
+    return category, filename, analysis_content
 
 
 def save_transcript(category, filename, transcript_content):
@@ -397,158 +531,215 @@ def discover_recent_folders(watch_folder, days_back=7):
 # ============================================================================
 
 
-def upload_to_gemini(file_path):
-    """Upload audio file and wait for processing. Returns Gemini file object."""
-    print("   🚀 Uploading to Gemini...", flush=True)
-    audio_file = genai.upload_file(path=file_path)
-
-    while audio_file.state.name == "PROCESSING":
-        print("   ...processing audio on server...", flush=True)
-        time.sleep(2)
-        audio_file = genai.get_file(audio_file.name)
-
-    if audio_file.state.name == "FAILED":
-        raise ValueError("Audio processing failed on Google servers.")
-
-    return audio_file
+def _get_audio_duration(file_path: str) -> float | None:
+    """Return audio duration in seconds via ffprobe, or None on failure."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", file_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        return float(result.stdout.strip()) if result.returncode == 0 else None
+    except Exception:
+        return None
 
 
-def transcribe_with_retry(audio_file):
-    """Call transcription model with retry. Returns (category, ai_filename, transcript)."""
-    best_result = None
+def upload_to_gemini(file_path: str):
+    """Upload audio file to Gemini Files API and wait until it is ACTIVE."""
+    uploaded = _gemini_client.files.upload(
+        file=file_path,
+        config=genai_types.UploadFileConfig(mimeType="audio/m4a"),
+    )
+    deadline = time.time() + API_TIMEOUT
+    while uploaded.state == genai_types.FileState.PROCESSING:
+        if time.time() > deadline:
+            raise TimeoutError(f"Gemini file upload timed out after {API_TIMEOUT}s")
+        time.sleep(5)
+        uploaded = _gemini_client.files.get(name=uploaded.name)
+    if uploaded.state == genai_types.FileState.FAILED:
+        raise PermanentFileError(f"Gemini rejected uploaded file: {uploaded.name}")
+    return uploaded
 
-    for attempt in range(MAX_RETRIES):
+
+def transcribe_with_gemini(file_path: str) -> str:
+    """Single Gemini Flash transcription attempt. Returns transcript string."""
+    uploaded = upload_to_gemini(file_path)
+    try:
+        response = _gemini_client.models.generate_content(
+            model=TRANSCRIPTION_MODEL,
+            contents=[TRANSCRIPTION_PROMPT, uploaded],
+            config=genai_types.GenerateContentConfig(
+                http_options=genai_types.HttpOptions(timeout=API_TIMEOUT * 1000),
+            ),
+        )
+        return extract_response_text(response)
+    except (FatalAPIError, PermanentFileError):
+        raise
+    except Exception as e:
+        raise classify_api_error(e) from e
+    finally:
         try:
-            if attempt > 0:
-                delay = RETRY_BACKOFF[min(attempt - 1, len(RETRY_BACKOFF) - 1)]
-                print(f"   ⏳ Retry {attempt + 1}/{MAX_RETRIES} in {delay}s...", flush=True)
-                time.sleep(delay)
+            _gemini_client.files.delete(name=uploaded.name)
+        except Exception:
+            pass
 
-            print(f"   🧠 Transcribing and classifying (attempt {attempt + 1}/{MAX_RETRIES})...", flush=True)
-            model = genai.GenerativeModel(TRANSCRIPTION_MODEL)
-            response = model.generate_content(
-                [TRANSCRIPTION_PROMPT, audio_file],
-                request_options=RequestOptions(timeout=API_TIMEOUT),
-            )
 
-            text = extract_response_text(response)
-            category, ai_filename, transcript_content = parse_transcription_response(text)
-            best_result = (category, ai_filename, transcript_content)
+def transcribe_with_fallback(file_path: str) -> str:
+    """Try Gemini Flash (2 attempts), fall back to local Whisper on failure."""
+    gemini_attempts = 2
+    last_error: Exception | None = None
 
-            is_default = category == "DEFAULT"
-            is_unknown = ai_filename == "Unknown Meeting.md"
-
-            if not is_default and not is_unknown:
-                return best_result
-
-            if is_default:
-                print("   ⚠️  Classification fell to DEFAULT", flush=True)
-            if is_unknown:
-                print("   ⚠️  Filename is 'Unknown Meeting'", flush=True)
-
+    for attempt in range(1, gemini_attempts + 1):
+        try:
+            print(f"   ☁️  Transcribing with Gemini Flash (attempt {attempt}/{gemini_attempts})...", flush=True)
+            transcript = transcribe_with_gemini(file_path)
+            print(f"   ✅ Gemini transcription succeeded", flush=True)
+            return transcript
         except (FatalAPIError, PermanentFileError):
             raise
         except Exception as e:
-            error_class = classify_api_error(e)
-            if error_class == "fatal":
-                raise FatalAPIError(f"Authentication/permission error: {e}") from e
-            if error_class == "permanent":
-                raise PermanentFileError(f"Bad request for this file: {e}") from e
-            print(f"   ❌ Transcription attempt {attempt + 1} failed: {e}", flush=True)
+            last_error = e
+            print(f"   ⚠️  Gemini attempt {attempt} failed: {e}", flush=True)
+            if attempt < gemini_attempts:
+                wait = RETRY_BACKOFF[0]
+                print(f"   ⏳ Retrying in {wait}s...", flush=True)
+                time.sleep(wait)
 
-    if best_result:
-        print(f"   ⚠️  Using best available result after {MAX_RETRIES} attempts", flush=True)
-        return best_result
+    print(
+        f"   🔄 Gemini failed after {gemini_attempts} attempts ({last_error}), "
+        "falling back to local transcription...",
+        flush=True,
+    )
+    return transcribe_local(file_path)
 
-    raise RuntimeError(f"Transcription failed after {MAX_RETRIES} attempts")
+
+def transcribe_local(file_path: str) -> str:
+    """Transcribe audio locally (Gemini fallback). Loads model on first call."""
+    configure_whisper()  # lazy — no-op if already loaded
+
+    try:
+        duration_secs = _get_audio_duration(file_path)
+        duration_str = f"{int(duration_secs // 60)}m {int(duration_secs % 60)}s" if duration_secs else "unknown length"
+    except Exception:
+        duration_str = "unknown length"
+
+    lines: list[str] = []
+    try:
+        if WHISPER_BACKEND == "parakeet":
+            if duration_secs and duration_secs > PARAKEET_MAX_SECS:
+                print(f"   ⏭️  Recording too long for Parakeet ({duration_str} > 15m), using mlx-whisper...", flush=True)
+                try:
+                    lines = _transcribe_with_mlx_fallback(file_path)
+                except Exception as e:
+                    raise PermanentFileError(f"mlx-whisper failed on long recording: {e}") from e
+            else:
+                print(f"   🧠 Transcribing locally (Parakeet, {duration_str})...", flush=True)
+                result = _parakeet_model.transcribe(file_path)
+                for segment in result.segments:
+                    ts = f"[{int(segment.start // 60):02d}:{int(segment.start % 60):02d}]"
+                    lines.append(f"{ts} {segment.text.strip()}")
+        elif WHISPER_BACKEND == "mlx":
+            print(f"   🧠 Transcribing locally (mlx-whisper, {duration_str})...", flush=True)
+            import os as _os
+            _os.environ["TQDM_DISABLE"] = "1"
+            result = _mlx_whisper.transcribe(file_path, path_or_hf_repo=WHISPER_MODEL, verbose=False)
+            for segment in result.get("segments", []):
+                ts = f"[{int(segment['start'] // 60):02d}:{int(segment['start'] % 60):02d}]"
+                lines.append(f"{ts} {segment['text'].strip()}")
+        else:
+            print(f"   🧠 Transcribing locally (faster-whisper, {duration_str})...", flush=True)
+            with warnings.catch_warnings():
+                # faster_whisper emits numpy RuntimeWarnings on silent frames — benign.
+                warnings.filterwarnings("ignore", category=RuntimeWarning, module="faster_whisper")
+                segments, _info = _whisper_model.transcribe(
+                    file_path,
+                    beam_size=5,
+                    vad_filter=True,
+                    vad_parameters={"min_silence_duration_ms": 500},
+                )
+            for segment in segments:
+                ts = f"[{int(segment.start // 60):02d}:{int(segment.start % 60):02d}]"
+                lines.append(f"{ts} {segment.text.strip()}")
+    except PermanentFileError:
+        raise
+    except Exception as e:
+        if WHISPER_BACKEND == "parakeet":
+            print(f"   ⚠️  Parakeet failed ({e}), falling back to mlx-whisper ({WHISPER_FALLBACK_MODEL})...", flush=True)
+            try:
+                lines = _transcribe_with_mlx_fallback(file_path)
+            except Exception as fallback_e:
+                raise PermanentFileError(
+                    f"Both Parakeet and mlx-whisper fallback failed — parakeet={e}, mlx={fallback_e}"
+                ) from fallback_e
+        else:
+            raise PermanentFileError(f"Transcription failed on this file: {e}") from e
+
+    if not lines:
+        raise PermanentFileError("Transcription returned empty result — audio may be silent or corrupt")
+
+    return "\n".join(lines)
 
 
-def analyze_with_claude(transcript_content: str) -> str | None:
-    """Single analysis attempt via Claude API. Returns text or None — never raises."""
-    if _claude_client is None:
+# --- Claude analysis (disabled) ---
+# def analyze_with_claude(transcript_content): ...
+
+
+def analyze_with_ollama(transcript_content: str) -> tuple[str, str, str] | None:
+    """Single analysis+classification attempt via local Ollama.
+
+    Returns (category, filename, analysis) on success.
+    Returns None on retryable failure.
+    Raises PermanentFileError on non-retryable failure.
+    """
+    if _ollama_client is None:
         return None
     try:
-        prompt = f"{ANALYSIS_PROMPT}\n\n---TRANSCRIPT TO ANALYZE---\n{transcript_content}"
-        message = _claude_client.messages.create(
-            model=CLAUDE_FALLBACK_MODEL,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
+        response = _ollama_client.chat(
+            model=OLLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": ANALYSIS_PROMPT},
+                {"role": "user", "content": f"---TRANSCRIPT TO ANALYZE---\n{transcript_content}"},
+            ],
+            think=OLLAMA_THINKING,
+            options=_ollama_lib.Options(num_ctx=OLLAMA_NUM_CTX),
+            keep_alive=OLLAMA_KEEP_ALIVE,
         )
-        if message.content and hasattr(message.content[0], "text"):
-            return message.content[0].text
-        return None
+        return parse_analysis_response(response.message.content)
     except Exception as e:
-        print(f"   ❌ Claude analysis failed: {e}", flush=True)
+        message, retryable = classify_ollama_error(e)
+        print(f"   ❌ Ollama analysis failed: {message}", flush=True)
+        if not retryable:
+            raise PermanentFileError(f"Ollama: {message}") from e
         return None
 
 
-def analyze_with_retry(transcript_content: str) -> str | None:
-    """Call analysis model with retry and optional Claude fallback.
+def analyze_with_retry(transcript_content: str) -> tuple[str, str, str] | None:
+    """Call Ollama analysis with retry backoff.
 
-    When ANTHROPIC_API_KEY is set, attempt sequence is:
-        Gemini → Claude → Claude → Gemini → Gemini
-    Otherwise falls back to the original Gemini-only chain.
+    Attempt sequence: Ollama → Ollama(60s) → Ollama(180s) → Ollama(300s)
 
-    Returns analysis text or None.
+    Returns (category, filename, analysis) tuple or None.
     """
-    use_claude = _claude_client is not None
-
-    if use_claude:
-        claude_backoff = CLAUDE_RETRY_BACKOFF[0] if CLAUDE_RETRY_BACKOFF else 10
-        gemini_backoff = ANALYSIS_RETRY_BACKOFF[0] if ANALYSIS_RETRY_BACKOFF else 60
-        # (provider, seconds_to_wait_before_this_attempt)
-        schedule = [
-            ("gemini", 0),
-            ("claude", 0),
-            ("claude", claude_backoff),
-            ("gemini", 0),
-            ("gemini", gemini_backoff),
-        ]
-    else:
-        # Original Gemini-only chain
-        schedule = [
-            ("gemini", 0 if i == 0 else ANALYSIS_RETRY_BACKOFF[min(i - 1, len(ANALYSIS_RETRY_BACKOFF) - 1)])
-            for i in range(MAX_RETRIES)
-        ]
-
+    schedule = [
+        (0 if i == 0 else ANALYSIS_RETRY_BACKOFF[min(i - 1, len(ANALYSIS_RETRY_BACKOFF) - 1)])
+        for i in range(len(ANALYSIS_RETRY_BACKOFF) + 1)
+    ]
     total = len(schedule)
 
-    for attempt_idx, (provider, wait_before) in enumerate(schedule):
+    for attempt_idx, wait_before in enumerate(schedule):
         attempt_num = attempt_idx + 1
-        provider_label = "Gemini" if provider == "gemini" else "Claude"
 
         if wait_before > 0:
-            print(f"   ⏳ Analysis attempt {attempt_num}/{total} [{provider_label}] in {wait_before}s...", flush=True)
+            print(f"   ⏳ Analysis attempt {attempt_num}/{total} [Ollama] in {wait_before}s...", flush=True)
             time.sleep(wait_before)
 
-        print(f"   📊 Analyzing transcript [{provider_label}] (attempt {attempt_num}/{total})...", flush=True)
+        print(f"   📊 Analyzing transcript [Ollama] (attempt {attempt_num}/{total})...", flush=True)
+        result = analyze_with_ollama(transcript_content)
+        if result is not None:
+            print(f"   ✅ Analysis succeeded via Ollama (attempt {attempt_num}/{total})", flush=True)
+            return result
 
-        if provider == "claude":
-            result = analyze_with_claude(transcript_content)
-            if result is not None:
-                print(f"   ✅ Analysis succeeded via Claude (attempt {attempt_num}/{total})", flush=True)
-                return result
-            continue  # error already logged inside analyze_with_claude
-
-        # Gemini path
-        try:
-            model = genai.GenerativeModel(ANALYSIS_MODEL)
-            prompt = f"{ANALYSIS_PROMPT}\n\n---TRANSCRIPT TO ANALYZE---\n{transcript_content}"
-            response = model.generate_content(
-                prompt,
-                request_options=RequestOptions(timeout=API_TIMEOUT),
-            )
-            return extract_response_text(response)
-
-        except FatalAPIError:
-            raise
-        except Exception as e:
-            error_class = classify_api_error(e)
-            if error_class == "fatal":
-                raise FatalAPIError(f"Authentication/permission error: {e}") from e
-            print(f"   ❌ Analysis attempt {attempt_num}/{total} [Gemini] failed: {e}", flush=True)
-
-    print(f"   ⚠️  Analysis failed after {total} attempts (transcript was saved)", flush=True)
+    print(f"   ⚠️  Analysis failed after {total} attempts", flush=True)
     return None
 
 
@@ -560,36 +751,30 @@ def process_audio(file_path, timestamp, state):
     """
     basename = os.path.basename(file_path)
     attempts = state.get("processed", {}).get(file_path, {}).get("attempts", 0)
-    audio_file = None
 
     try:
-        # Stage A: Upload
-        audio_file = upload_to_gemini(file_path)
-
-        # Stage B: Transcribe + Classify
-        category, ai_filename, transcript_content = transcribe_with_retry(audio_file)
+        # Stage B: Transcribe (Gemini Flash primary, local Whisper fallback after 2 failures)
+        transcript_content = transcribe_with_fallback(file_path)
         formatted_timestamp = timestamp.strftime(TIMESTAMP_FORMAT)
-        filename = f"{formatted_timestamp} - {ai_filename}"
 
-        # Stage C: Save transcript
-        transcript_path = save_transcript(category, filename, transcript_content)
-        print(f"   ✅ Transcript saved: {transcript_path}", flush=True)
+        # Stage C: Analyze + Classify
+        analysis_result = analyze_with_retry(transcript_content)
 
-        # Stage D: Analyze
-        analysis_text = analyze_with_retry(transcript_content)
-
-        # Stage E: Save analysis + cleanup
-        if analysis_text:
+        # Stage D: Save transcript + analysis to correct category folder
+        if analysis_result:
+            category, ai_filename, analysis_text = analysis_result
+            filename = f"{formatted_timestamp} - {ai_filename}"
+            transcript_path = save_transcript(category, filename, transcript_content)
+            print(f"   ✅ Transcript saved: {transcript_path}", flush=True)
             analysis_path = save_analysis(category, filename, analysis_text)
             if analysis_path:
                 print(f"   ✅ Analysis saved: {analysis_path}", flush=True)
         else:
+            category = "DEFAULT"
+            filename = f"{formatted_timestamp} - Unknown Meeting.md"
+            transcript_path = save_transcript(category, filename, transcript_content)
+            print(f"   ✅ Transcript saved (DEFAULT — analysis failed): {transcript_path}", flush=True)
             log_failed_analysis(transcript_path, category, filename)
-
-        try:
-            audio_file.delete()
-        except Exception:
-            pass
 
         state.setdefault("processed", {})[file_path] = {
             "status": "complete",
@@ -602,20 +787,10 @@ def process_audio(file_path, timestamp, state):
         return True, category
 
     except FatalAPIError:
-        if audio_file:
-            try:
-                audio_file.delete()
-            except Exception:
-                pass
         raise
 
     except PermanentFileError as e:
         print(f"   🛑 Permanent error for {basename}: {e}", flush=True)
-        if audio_file:
-            try:
-                audio_file.delete()
-            except Exception:
-                pass
         state.setdefault("processed", {})[file_path] = {
             "status": "failed_permanent",
             "error": str(e),
@@ -627,11 +802,6 @@ def process_audio(file_path, timestamp, state):
 
     except Exception as e:
         print(f"   ❌ Failed to process {basename}: {e}", flush=True)
-        if audio_file:
-            try:
-                audio_file.delete()
-            except Exception:
-                pass
 
         attempts += 1
         if attempts >= MAX_RETRIES:

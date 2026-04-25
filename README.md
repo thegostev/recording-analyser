@@ -4,29 +4,30 @@
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/thegostev/recording-analyser/tests.yml?logo=github&label=build)](https://github.com/thegostev/recording-analyser/actions)
 [![License: MIT](https://img.shields.io/github/license/thegostev/recording-analyser?color=green)](https://github.com/thegostev/recording-analyser/blob/main/LICENSE)
-[![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)](https://www.python.org)
-[![Google Gemini](https://img.shields.io/badge/API-Google%20Gemini-8E75B2?logo=googlegemini&logoColor=white)](https://ai.google.dev)
+[![Python](https://img.shields.io/badge/python-3.9+-3776AB?logo=python&logoColor=white)](https://www.python.org)
 [![macOS](https://img.shields.io/badge/platform-macOS-000000?logo=apple&logoColor=white)](https://support.apple.com/guide/launchd)
 [![Obsidian](https://img.shields.io/badge/output-Obsidian%20Markdown-7C3AED?logo=obsidian&logoColor=white)](https://obsidian.md)
 
-Automated transcription and analysis of audio recordings using Google's Gemini API. Runs as a macOS background service, processes audio from [Just Press Record](https://www.openplanetsoftware.com/just-press-record/), classifies content into categories, and outputs structured Markdown notes to Obsidian vaults.
+Automated transcription and analysis of audio recordings. Runs as a macOS background service, picks up recordings from [Just Press Record](https://www.openplanetsoftware.com/just-press-record/), transcribes locally with Whisper, classifies and analyses with a local Ollama model (or Gemini Pro), and outputs structured Markdown notes to Obsidian vaults.
 
 ## What it does
 
 1. Watches a folder for new `.m4a` audio recordings
-2. Transcribes audio using Gemini Flash (verbatim + speaker diarization + timestamps)
-3. Classifies each recording into a category based on keywords in the prompt
-4. Analyzes the transcript using Gemini Pro (extracts insights, decisions, action items)
-5. Saves transcript and analysis as Markdown to category-specific folders
+2. Transcribes audio locally using Whisper (verbatim, timestamped)
+3. Classifies each recording into a category and generates a filename via the analysis model
+4. Analyzes the transcript (insights, decisions, action items) — fully local with Ollama
+5. Saves transcript and analysis as Markdown to category-specific Obsidian vault folders
 
 State is tracked in `~/.meeting_transcriber_state.json` — processed files are never reprocessed.
 
 ## Prerequisites
 
-- macOS (uses `mdls` for audio duration metadata, `launchd` for service management)
+- macOS (uses `mdls` for file metadata, `launchd` for service management)
 - Python 3.9+
-- Google Gemini API key ([get one](https://aistudio.google.com/apikey))
-- [Just Press Record](https://www.openplanetsoftware.com/just-press-record/) or any app that saves `.m4a` files in `YYYY-MM-DD/` subfolders
+- [Ollama](https://ollama.com) running locally with a model pulled — e.g. `ollama pull qwen3.5:9b`
+- [Just Press Record](https://www.openplanetsoftware.com/just-press-record/) or any app that saves `.m4a` files into `YYYY-MM-DD/` subfolders
+
+Optional: Google Gemini API key (only if you set `analysis_provider: gemini` in config).
 
 ## Setup
 
@@ -39,18 +40,72 @@ source venv/bin/activate
 pip install -e .
 
 cp config.example.yaml config.yaml
-# Edit config.yaml — set watch_folder, folders, and optionally the model names
+# Edit config.yaml:
+#   - set watch_folder (where your .m4a files land)
+#   - set folders (category name → output path)
+#   - set ollama_model to match: ollama list
 ```
 
-Set your API key in `~/.zshrc`:
-
-```bash
-export GEMINI_API_KEY="your-gemini-api-key"
-```
+No API key is needed in Ollama mode. The service will start without any environment variables set.
 
 ## Running
 
-### As a background service (recommended)
+### As a background service (recommended for daily use)
+
+Use `run_transcriber.sh` — it manages a PID file and logs to `transcriber.log` in the project folder.
+
+First, navigate to the project and activate the venv:
+
+```bash
+cd "/Users/Necessaire/Documents/Koding - Obsidian/1 - Code/RecordingAnalyser"
+source venv/bin/activate
+```
+
+Then use the shell wrapper (the venv activation is only needed once per terminal session):
+
+```bash
+./run_transcriber.sh start     # launch in background
+./run_transcriber.sh stop      # stop
+./run_transcriber.sh restart   # stop + start
+./run_transcriber.sh status    # check if running + last 5 log lines
+./run_transcriber.sh logs      # tail the log (Ctrl+C to exit)
+```
+
+After starting, follow the log to watch it work in real time:
+
+```bash
+./run_transcriber.sh logs
+```
+
+Example output when the service is processing files:
+
+```
+✅ Ollama configured (qwen3.5:9b @ http://localhost:11434, thinking=False)
+🎙️  Loading Whisper model (large-v3)...
+✅ Whisper model loaded
+============================================================
+🎙️  Auto-Transcription Service
+============================================================
+Scan interval: 30s | Delay between files: 5s
+📚 Loaded state: 357 completed, 0 permanently failed
+🔄 Starting scan loop (every 30s)...
+
+[Cycle 1] 06:56:07 - Found 5 file(s) to process
+
+📂 [1/5] 2026-04-19/11-11-03.m4a
+   🧠 Transcribing locally (Whisper)...
+   ✅ Transcript saved: .../transcripts/26-04-19 11.11 - Team Sync - Planning.md
+   📊 Analyzing transcript [Ollama] (attempt 1/4)...
+   ✅ Analysis succeeded via Ollama
+   ✅ Analysis saved: .../analysis/26-04-19 11.11 - Team Sync - Planning - Analysis.md
+   ⏸️  Pausing 5s before next file...
+
+[Cycle 8] 07:03:30 - No new files
+```
+
+When idle, it logs `No new files` every 30 seconds. Press `Ctrl+C` to stop tailing (the service keeps running).
+
+Alternatively, register as a launchd agent so it starts automatically on login:
 
 Create `~/Library/LaunchAgents/com.necessaire.transcriber.plist`:
 
@@ -66,11 +121,6 @@ Create `~/Library/LaunchAgents/com.necessaire.transcriber.plist`:
         <string>/path/to/RecordingAnalyser/venv/bin/python</string>
         <string>/path/to/RecordingAnalyser/auto_transcribe.py</string>
     </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>GEMINI_API_KEY</key>
-        <string>your-gemini-api-key</string>
-    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -83,8 +133,6 @@ Create `~/Library/LaunchAgents/com.necessaire.transcriber.plist`:
 </plist>
 ```
 
-> The `EnvironmentVariables` block in the plist is required — launchd daemons don't inherit your shell environment.
-
 ```bash
 launchctl load ~/Library/LaunchAgents/com.necessaire.transcriber.plist    # start
 launchctl unload ~/Library/LaunchAgents/com.necessaire.transcriber.plist  # stop
@@ -92,6 +140,8 @@ launchctl list | grep transcriber                                          # sta
 tail -f /tmp/transcriber.out                                               # logs
 tail -f /tmp/transcriber.err                                               # errors
 ```
+
+> If using Gemini (`analysis_provider: gemini`), add an `EnvironmentVariables` block to the plist with `GEMINI_API_KEY` — launchd daemons don't inherit your shell environment.
 
 ### In the foreground
 
@@ -102,45 +152,88 @@ python auto_transcribe.py
 
 ### On-demand / catchup
 
-Run it in case the daemon is failed for some reason. Though daemon is stable and this catchup is not required.
+Process recordings that the daemon missed (e.g. after downtime):
 
 ```bash
-python ondemand_transcribe.py --catchup --dry-run      # preview what would run
-python ondemand_transcribe.py --catchup                # process last 7 days
-python ondemand_transcribe.py --catchup 14             # process last 14 days
+python ondemand_transcribe.py --catchup --dry-run       # preview last 7 days
+python ondemand_transcribe.py --catchup                 # process last 7 days
+python ondemand_transcribe.py --catchup 14              # process last 14 days
 python ondemand_transcribe.py --catchup --reprocess-partial  # regenerate missing analysis only
+```
+
+Or via the shell wrapper:
+
+```bash
+./run_transcriber.sh catchup           # last 7 days
+./run_transcriber.sh catchup 14        # last 14 days
+./run_transcriber.sh catchup-preview   # dry-run preview
+./run_transcriber.sh reprocess         # regenerate missing analysis
+```
+
+## Maintenance
+
+Fix analysis or classification issues without reprocessing audio:
+
+```bash
+# Generate analysis files that are missing (transcript exists but no analysis)
+./run_transcriber.sh fix-analysis
+./run_transcriber.sh fix-analysis --dry-run    # preview first
+
+# Reclassify "Unknown Meeting" files and move them to the correct folder
+./run_transcriber.sh fix-categories
+./run_transcriber.sh fix-categories --dry-run
+
+# Both at once
+./run_transcriber.sh fix-all
+./run_transcriber.sh fix-all --dry-run
+
+# Direct: same operations with verbose output
+python reclassify_and_fix.py --generate-missing-analysis --verbose
+python reclassify_and_fix.py --reclassify --dry-run --verbose
+python reclassify_and_fix.py --generate-missing-analysis --reclassify
 ```
 
 ## Configuration
 
 All settings live in `config.yaml` (gitignored). `config.example.yaml` is the template.
 
+### Analysis provider
+
+| Setting | Value | Description |
+|---|---|---|
+| `analysis_provider` | `ollama` (default) | Use local Ollama model — no API key needed |
+| `analysis_provider` | `gemini` | Use Gemini Pro cloud model — requires `GEMINI_API_KEY` env var |
+
+### Ollama settings
+
 | Setting | Default | Description |
 |---|---|---|
-| `transcription_model` | `gemini-3-flash-preview` | Flash model for transcription + classification |
-| `analysis_model` | `gemini-3-pro-preview` | Pro model for analysis |
-| `watch_folder` | — | Where audio files land (date-based subfolders: `YYYY-MM-DD/*.m4a`) |
-| `folders` | — | Category name → output path. Each gets `transcripts/` and `analysis/` subdirs |
+| `ollama_model` | `qwen3.5:9b` | Model tag as shown in `ollama list` |
+| `ollama_host` | `http://localhost:11434` | Ollama server address |
+| `ollama_thinking` | `false` | Enable extended reasoning (adds ~2–3 min per file) |
+
+### Service behavior
+
+| Setting | Default | Description |
+|---|---|---|
+| `watch_folder` | — | Where audio files land (`YYYY-MM-DD/*.m4a` subfolders) |
+| `folders` | — | Category name → output path. Gets `transcripts/` and `analysis/` subdirs |
 | `state_file` | `~/.meeting_transcriber_state.json` | Tracks processed files |
 | `failed_analysis_log` | `failed_analysis.log` | Log for files where analysis failed |
 | `scan_interval` | `30` | Seconds between scan cycles |
 | `scan_days_back` | `7` | How many days back to scan |
-| `delay_between_files` | `90` | Seconds between files (rate limiting) |
+| `delay_between_files` | `5` | Seconds between files (no rate limiting needed with Ollama) |
 | `max_files_per_cycle` | `5` | Files processed per scan cycle |
-| `max_retries` | `3` | API retry attempts |
+| `max_retries` | `3` | Retry attempts per processing stage |
 | `retry_backoff` | `[10, 30, 60]` | Seconds between transcription retries |
 | `analysis_retry_backoff` | `[60, 180, 300]` | Seconds between analysis retries |
 | `api_timeout` | `300` | API call timeout in seconds |
 
-### API key
-
-The API key is **never** read from `config.yaml`. It comes from `GEMINI_API_KEY` env var only — set it in `~/.zshrc` for foreground use, and in the launchd plist `EnvironmentVariables` block for the daemon.
-
 ### Classification
 
-The Flash model receives your audio and the `transcription_prompt`. The prompt defines your categories and associated keywords. The model outputs a `CATEGORY:` tag, which routes output files to the matching folder key in `folders`.
+The analysis model receives the transcript and `analysis_prompt`. The prompt defines your categories and associated keywords. The model outputs a `CATEGORY:` tag that routes output files to the matching key in `folders`.
 
-To add or change categories: edit the category list in `transcription_prompt` and add the matching key to `folders`. Category names must match exactly.
+To add or change categories: edit the category list in `analysis_prompt` and add the matching key to `folders`. Category names must match exactly.
 
 ## Processing pipeline
 
@@ -148,38 +241,37 @@ To add or change categories: edit the category list in `transcription_prompt` an
 Audio file (.m4a)
     │
     ▼
-[Gemini Flash] ── Transcript + CATEGORY + FILENAME
+[Whisper] ── Timestamped transcript
     │
     ▼
-Save to <category>/transcripts/<date>-<filename>.md
+[Ollama / Gemini Pro] ── CATEGORY + FILENAME + Analysis
     │
-    ▼
-[Gemini Pro] ── Analysis (insights, decisions, action items)
+    ├── Save to <category>/transcripts/<date> - <filename>.md
     │
-    ▼
-Save to <category>/analysis/<date>-<filename>.md
+    └── Save to <category>/analysis/<date> - <filename> - Analysis.md
 ```
 
 Key behaviours:
 - Transcript is saved before analysis runs — analysis failure never loses the transcript
-- Three error tiers: **fatal** (bad API key → service stops), **permanent** (bad file → skipped), **transient** (quota → retries with backoff)
+- Three error tiers: **fatal** (bad API key → service stops), **permanent** (bad file → skipped forever), **transient** (connection error → retries with backoff)
+- All Ollama errors are transient — if the server is temporarily down, the file retries on the next cycle
 - Duplicate prevention via state file — files are never reprocessed
 
 ## Project structure
 
 ```
-auto_transcribe.py     Long-running daemon
+auto_transcribe.py     Long-running daemon (scan loop)
 ondemand_transcribe.py Manual/batch processing CLI
 reclassify_and_fix.py  Maintenance: fix missing analysis, reclassify files
-pipeline.py            Shared transcription pipeline (API, parsing, file I/O, state)
-run_transcriber.sh     Shell wrapper for common operations
-config.py              Configuration loader (injects env vars, expands paths)
+pipeline.py            Shared pipeline (Whisper, Ollama/Gemini, parsing, file I/O, state)
+run_transcriber.sh     Shell wrapper for all common operations
+config.py              Configuration loader (reads config.yaml, injects env vars)
 config.yaml            Active configuration (gitignored)
 config.example.yaml    Configuration template
-pyproject.toml         Dependencies: google-generativeai, PyYAML
+pyproject.toml         Dependencies and project metadata
 tests/                 Test suite
-Post-mortems/          Incident documentation
-ARCHITECTURE.md        System decomposition (WBS)
+ARCHITECTURE.md        System decomposition (WBS, L0–L3)
+docs/adr/              Architectural decision records
 ```
 
 ## Tests

@@ -17,8 +17,8 @@ from pipeline import (
     FatalAPIError,
     analyze_with_retry,
     build_transcript_index,
-    configure_claude,
     configure_gemini,
+    configure_ollama,
     discover_recent_folders,
     get_audio_timestamp,
     is_file_stable,
@@ -150,9 +150,10 @@ def reprocess_analysis_only(transcript_only_files, dry_run=False):
             with open(transcript_path, "r", encoding="utf-8") as f:
                 transcript_content = f.read()
 
-            analysis_text = analyze_with_retry(transcript_content)
+            result = analyze_with_retry(transcript_content)
 
-            if analysis_text:
+            if result:
+                _, _, analysis_text = result  # category/filename from disk — don't relocate
                 transcript_filename = os.path.basename(transcript_path)
                 analysis_path = save_analysis(category, transcript_filename, analysis_text)
                 if analysis_path:
@@ -221,7 +222,7 @@ Examples:
         sys.exit(1)
 
     configure_gemini()
-    configure_claude()
+    configure_ollama()
 
     print("=" * 60)
     print("📼 On-Demand Audio Transcription & Analysis")

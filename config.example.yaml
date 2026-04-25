@@ -1,17 +1,25 @@
 # MeetingTranscriber Configuration
 # Copy this file to config.yaml and fill in your values.
 
-# API key: set GEMINI_API_KEY environment variable (required)
+# ── Analysis provider ──────────────────────────────────────────────────────
+# "ollama"  — fully local, no API keys needed (default)
+# "gemini"  — Gemini Pro cloud model (requires GEMINI_API_KEY env var)
+analysis_provider: ollama
+
+# Ollama settings (used when analysis_provider: ollama)
+# Run `ollama list` to confirm the exact model tag installed on your machine.
+ollama_model: "qwen3.5:9b"
+ollama_host: "http://localhost:11434"
+# ollama_thinking: false  # set true to enable Qwen extended reasoning (~163s/file)
+
+# ── Gemini (disabled — only needed when analysis_provider: gemini) ─────────
 # export GEMINI_API_KEY="your-key"  # in ~/.zshrc or launchd plist
+# transcription_model: "gemini-3-flash-preview"
+# analysis_model: "gemini-3-pro-preview"
 
-# Claude fallback: set ANTHROPIC_API_KEY environment variable (optional)
-# If set, Claude Sonnet is used as fallback when Gemini Pro analysis fails.
+# ── Claude fallback (disabled — Ollama mode is fully local) ───────────────
 # export ANTHROPIC_API_KEY="your-key"  # in ~/.zshrc or launchd plist
-
-# Model names
-transcription_model: "gemini-3-flash-preview"
-analysis_model: "gemini-3-pro-preview"
-# claude_fallback_model: "claude-sonnet-4-6"   # default; override if needed
+# claude_fallback_model: "claude-sonnet-4-6"
 
 # Watch folder: where Just Press Record saves audio files
 # Audio files should be organized in date-based subfolders: YYYY-MM-DD/*.m4a
@@ -31,7 +39,7 @@ failed_analysis_log: "failed_analysis.log"
 # Service behavior
 scan_interval: 30           # seconds between scan cycles
 scan_days_back: 7           # how many days of recordings to scan
-delay_between_files: 90     # seconds pause between files (API rate limiting)
+delay_between_files: 5      # seconds pause between files (no API rate limits with Ollama; was 90 for Gemini)
 max_retries: 3              # retry attempts per API call
 max_files_per_cycle: 5      # max files to process per scan cycle
 retry_backoff: [10, 30, 60]             # seconds between transcription retries
